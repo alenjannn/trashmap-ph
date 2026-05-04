@@ -1,4 +1,4 @@
-# CodeKada 2025
+# CodeKada 2026
 <img src="./assets/logo.png" alt="TrashMap PH Logo" width="500"/>
 
 ## TrashMap PH — Community Waste Management & Smart Collection Intelligence Platform
@@ -26,6 +26,38 @@ By empowering citizens to report illegal dumpsites in real time and giving LGU o
 * Generoso Estrabon
 * Renz Eli Rey
 * Peter Daniel Estuesta
+
+## Project Structure
+
+```
+trashmap-ph/
+├── assets/                        ← README images (logo, screenshots)
+│
+├── client_app/                    ← Flutter app — CLIENT SIDE (Citizen & Driver)
+│   ├── android/                   ← Android build config & permissions
+│   ├── lib/
+│   │   ├── main.dart              ← App entry point, Supabase init
+│   │   ├── screens/               ← UI screens (report form, map view, schedule)
+│   │   ├── models/                ← Data models (Report, Zone, Schedule)
+│   │   └── services/              ← Supabase queries & API calls
+│   └── pubspec.yaml               ← Flutter dependencies
+│
+├── supabase/
+│   └── schema.sql                 ← Database tables, PostGIS setup, Realtime config
+│
+├── src/                           ← Next.js source — LGU SIDE (Officer Dashboard)
+│   ├── app/
+│   │   ├── page.tsx               ← Main dashboard entry
+│   │   ├── dashboard/             ← LGU live map & report management
+│   │   ├── routes/                ← Route optimization & schedule publishing
+│   │   └── api/                   ← Server-side API routes (ORS integration)
+│   └── components/                ← Reusable UI components (Map, PinCard, Heatmap)
+│
+├── public/                        ← Static assets for Next.js
+├── .env.local                     ← Environment variables (never commit this)
+├── package.json                   ← Next.js dependencies
+└── README.md
+```
 
 ## Screenshots
 ![LGU Dashboard](./assets/dashboard.png)
