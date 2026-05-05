@@ -1,7 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { dashboardPins, fleetTrucks, incidentFeed } from "@/components/layout/dashboard-mock-data";
+import { createClient } from "@supabase/supabase-js";
+import { useEffect, useMemo, useState } from "react";
+import {
+  type DashboardPin,
+  fleetTrucks,
+  incidentFeed,
+} from "@/components/layout/dashboard-mock-data";
 import { FleetStatusPanel } from "@/components/panels/fleet-status-panel";
 import { IncidentFeedPanel } from "@/components/panels/incident-feed-panel";
 
@@ -14,7 +20,82 @@ const LGUMap = dynamic(() => import("@/components/map/lgu-map").then((mod) => mo
   ),
 });
 
+type ReportRow = {
+  id: string;
+  lat: number;
+  lng: number;
+  report_type: "dumpsite" | "missed_pickup";
+  waste_type: "biodegradable" | "recyclable" | "special_hazardous" | "mixed" | "unknown";
+  description: string | null;
+};
+
 export function DashboardShell() {
+  const [pins, setPins] = useState<DashboardPin[]>([]);
+  const [isLoadingPins, setIsLoadingPins] = useState(true);
+  const [pinError, setPinError] = useState<string | null>(null);
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  const supabase = useMemo(() => {
+    if (!supabaseUrl || !supabaseAnonKey) return null;
+    return createClient(supabaseUrl, supabaseAnonKey);
+  }, [supabaseAnonKey, supabaseUrl]);
+
+  const configError = !supabase ? "Supabase environment is not configured." : null;
+
+  useEffect(() => {
+    if (!supabase) return;
+    const client = supabase;
+
+    function mapReportToPin(report: ReportRow): DashboardPin {
+      return {
+        id: report.id,
+        lat: report.lat,
+        lng: report.lng,
+        type: report.report_type,
+        label: report.description?.trim() || "Citizen report",
+        wasteType: report.waste_type,
+      };
+    }
+
+    async function loadReports() {
+      setIsLoadingPins(true);
+      const { data, error } = await client
+        .from("reports")
+        .select("id, lat, lng, report_type, waste_type, description")
+        .order("created_at", { ascending: false })
+        .limit(250);
+
+      if (error) {
+        setPinError("Failed to load live report pins.");
+        setIsLoadingPins(false);
+        return;
+      }
+
+      setPins((data ?? []).map((row) => mapReportToPin(row as ReportRow)));
+      setPinError(null);
+      setIsLoadingPins(false);
+    }
+
+    void loadReports();
+
+    const channel = client
+      .channel("dashboard-reports-live")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "reports" },
+        () => {
+          void loadReports();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [supabase]);
+
   return (
     <div className="min-h-screen bg-zinc-100">
       <header className="border-b border-emerald-100 bg-white">
@@ -49,7 +130,21 @@ export function DashboardShell() {
             </div>
           </div>
           <div className="h-[560px] overflow-hidden rounded-xl border border-zinc-200">
-            <LGUMap pins={dashboardPins} />
+            {pinError ? (
+              <div className="flex h-full items-center justify-center px-4 text-center text-sm text-red-700">
+                {pinError}
+              </div>
+            ) : configError ? (
+              <div className="flex h-full items-center justify-center px-4 text-center text-sm text-red-700">
+                {configError}
+              </div>
+            ) : isLoadingPins ? (
+              <div className="flex h-full items-center justify-center text-sm text-zinc-500">
+                Loading live report pins...
+              </div>
+            ) : (
+              <LGUMap pins={pins} />
+            )}
           </div>
         </section>
 

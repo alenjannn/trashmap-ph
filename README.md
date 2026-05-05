@@ -118,3 +118,14 @@ Detailed notes:
 - `docs/day1/ui-baseline.md`
 - `docs/day1/block-f-validation.md`
 - `docs/day1/day2-handoff.md`
+
+## Day 2 Progress Status
+- `Phase 1` Auth foundation schema + role profile trigger done
+- `Phase 2` Web admin login gate + authority check done
+- `Phase 3` Mobile auth (sign in/sign up) + role entry routing done
+- `Phase 4` Citizen pin-drop + report submit payload wiring done
+- `Phase 5` Dashboard live pin source + realtime sync from Supabase done
+- `Phase 6` Local validation + end-to-end demo checklist done
+
+Detailed notes:
+- `docs/day2/phase6-validation.md`

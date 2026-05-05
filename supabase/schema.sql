@@ -130,6 +130,64 @@ create table if not exists app_config (
   updated_at timestamptz not null default now()
 );
 
+-- Auth foundation for Day 2 role-gated access
+create table if not exists app_user_profiles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  display_name text,
+  role text not null default 'citizen' check (role in ('admin', 'citizen', 'driver')),
+  is_authority_confirmed boolean not null default false,
+  driver_verification_status text not null default 'not_submitted'
+    check (driver_verification_status in ('not_submitted', 'pending', 'approved', 'rejected'))
+);
+
+create index if not exists idx_app_user_profiles_role on app_user_profiles (role);
+
+-- Demo-only admin credential seed for hackathon local testing
+-- Replace/remove before production.
+create table if not exists admin_access_secrets (
+  id uuid default gen_random_uuid() primary key,
+  username text not null unique,
+  password_plain text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+insert into admin_access_secrets (username, password_plain, is_active)
+values ('admin123', 'admin123', true)
+on conflict (username) do update
+set password_plain = excluded.password_plain,
+    is_active = excluded.is_active;
+
+create or replace function public.handle_new_auth_user_profile()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.app_user_profiles (user_id, role, is_authority_confirmed)
+  values (new.id, 'citizen', false)
+  on conflict (user_id) do nothing;
+
+  return new;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_trigger
+    where tgname = 'on_auth_user_created_profile'
+  ) then
+    create trigger on_auth_user_created_profile
+      after insert on auth.users
+      for each row execute procedure public.handle_new_auth_user_profile();
+  end if;
+end $$;
+
 -- Enable Supabase Realtime for tables used by Day 2 live demo flow
 do $$
 begin

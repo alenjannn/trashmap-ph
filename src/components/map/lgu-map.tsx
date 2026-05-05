@@ -44,7 +44,7 @@ export function LGUMap({ pins }: Props) {
               <p className="text-sm font-semibold uppercase tracking-wide">{pin.type.replace("_", " ")}</p>
               <p className="text-sm">{pin.label}</p>
               {pin.wasteType ? (
-                <p className="text-xs text-zinc-500">Waste: {pin.wasteType.replace("_", " ")}</p>
+                <p className="text-xs text-zinc-500">Waste: {pin.wasteType.replaceAll("_", " ")}</p>
               ) : null}
             </div>
           </Popup>

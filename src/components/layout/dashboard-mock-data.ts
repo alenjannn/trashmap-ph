@@ -4,7 +4,7 @@ export type DashboardPin = {
   lng: number;
   type: "dumpsite" | "missed_pickup" | "hotspot";
   label: string;
-  wasteType?: "biodegradable" | "recyclable" | "mixed" | "unknown";
+  wasteType?: "biodegradable" | "recyclable" | "special_hazardous" | "mixed" | "unknown";
 };
 
 export type FleetTruck = {

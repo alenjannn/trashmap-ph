@@ -2,8 +2,36 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
-class MapScreen extends StatelessWidget {
-  const MapScreen({super.key});
+class MapScreen extends StatefulWidget {
+  const MapScreen({
+    super.key,
+    this.selectedPoint,
+    this.onPinSelected,
+  });
+
+  final LatLng? selectedPoint;
+  final ValueChanged<LatLng>? onPinSelected;
+
+  @override
+  State<MapScreen> createState() => _MapScreenState();
+}
+
+class _MapScreenState extends State<MapScreen> {
+  late LatLng? _localSelectedPoint;
+
+  @override
+  void initState() {
+    super.initState();
+    _localSelectedPoint = widget.selectedPoint;
+  }
+
+  @override
+  void didUpdateWidget(covariant MapScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedPoint != widget.selectedPoint) {
+      _localSelectedPoint = widget.selectedPoint;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -30,10 +58,26 @@ class MapScreen extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(16),
               child: FlutterMap(
-                options: const MapOptions(
-                  initialCenter: qcCenter,
+                options: MapOptions(
+                  initialCenter: _localSelectedPoint ?? qcCenter,
                   initialZoom: 14,
-                  interactionOptions: InteractionOptions(flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag),
+                  interactionOptions: const InteractionOptions(
+                    flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
+                  ),
+                  onTap: (_, LatLng latLng) {
+                    setState(() {
+                      _localSelectedPoint = latLng;
+                    });
+                    widget.onPinSelected?.call(latLng);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'Pin set: ${latLng.latitude.toStringAsFixed(6)}, ${latLng.longitude.toStringAsFixed(6)}',
+                        ),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
                 ),
                 children: <Widget>[
                   TileLayer(
@@ -52,6 +96,21 @@ class MapScreen extends StatelessWidget {
                         )
                         .toList(),
                   ),
+                  if (_localSelectedPoint != null)
+                    MarkerLayer(
+                      markers: <Marker>[
+                        Marker(
+                          point: _localSelectedPoint!,
+                          width: 46,
+                          height: 46,
+                          child: const Icon(
+                            Icons.place,
+                            color: Color(0xFF166534),
+                            size: 38,
+                          ),
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),

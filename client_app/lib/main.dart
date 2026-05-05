@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:client_app/screens/home_shell.dart';
+import 'package:client_app/screens/auth_gate.dart';
+import 'package:client_app/services/supabase_service.dart';
 import 'package:client_app/theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SupabaseService.initialize();
   runApp(const TrashMapApp());
 }
 
@@ -15,7 +17,7 @@ class TrashMapApp extends StatelessWidget {
     return MaterialApp(
       title: 'TrashMap PH',
       theme: AppTheme.light(),
-      home: const HomeShell(),
+      home: const AuthGate(),
     );
   }
 }

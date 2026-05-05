@@ -1,5 +1,5 @@
-import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { AdminLoginGate } from "@/components/layout/admin-login-gate";
 
 export default function Home() {
-  return <DashboardShell />;
+  return <AdminLoginGate />;
 }

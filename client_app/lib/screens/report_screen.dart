@@ -1,9 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:client_app/widgets/section_card.dart';
+import 'package:client_app/services/supabase_service.dart';
+import 'package:latlong2/latlong.dart';
 
 class ReportScreen extends StatefulWidget {
-  const ReportScreen({super.key});
+  const ReportScreen({
+    super.key,
+    this.selectedPoint,
+    this.onRequestPinTab,
+  });
+
+  final LatLng? selectedPoint;
+  final VoidCallback? onRequestPinTab;
 
   @override
   State<ReportScreen> createState() => _ReportScreenState();
@@ -16,6 +25,73 @@ class _ReportScreenState extends State<ReportScreen> {
   final ImagePicker _picker = ImagePicker();
   String _wasteType = 'Mixed';
   String? _pickedLabel;
+  bool _isSubmitting = false;
+
+  String _normalizedWasteType() {
+    switch (_wasteType) {
+      case 'Biodegradable':
+        return 'biodegradable';
+      case 'Recyclable':
+        return 'recyclable';
+      case 'Special/Hazardous':
+        return 'special_hazardous';
+      case 'Mixed':
+        return 'mixed';
+      case 'Unknown':
+      default:
+        return 'unknown';
+    }
+  }
+
+  Future<void> _submitReport() async {
+    final LatLng? point = widget.selectedPoint;
+    if (point == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No map pin yet. Set pin in Map tab first.')),
+      );
+      return;
+    }
+
+    if (_descriptionController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Add short description before submit.')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    try {
+      final String? reporterId = SupabaseService.client.auth.currentUser?.id;
+      await SupabaseService.client.from('reports').insert(<String, dynamic>{
+        'reporter_id': reporterId,
+        'lat': point.latitude,
+        'lng': point.longitude,
+        'report_type': 'dumpsite',
+        'waste_type': _normalizedWasteType(),
+        'description': _descriptionController.text.trim(),
+      });
+
+      if (!mounted) return;
+      _descriptionController.clear();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Report submitted. LGU feed will update in realtime phase.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Submit failed: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -34,6 +110,11 @@ class _ReportScreenState extends State<ReportScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final LatLng? selectedPoint = widget.selectedPoint;
+    _locationController.text = selectedPoint == null
+        ? 'No map pin selected yet'
+        : '${selectedPoint.latitude.toStringAsFixed(6)}, ${selectedPoint.longitude.toStringAsFixed(6)}';
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
       child: Column(
@@ -48,7 +129,7 @@ class _ReportScreenState extends State<ReportScreen> {
           ),
           SectionCard(
             title: 'Photo Evidence',
-            subtitle: 'UI ready. Upload logic follows on Day 2.',
+            subtitle: 'Photo picker ready. Upload storage next phase.',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -67,15 +148,38 @@ class _ReportScreenState extends State<ReportScreen> {
           ),
           SectionCard(
             title: 'Location',
-            subtitle: 'Static placeholder for Day 1 shell',
-            child: TextField(
-              controller: _locationController,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: 'Auto-detected location',
-              ),
+            subtitle: 'Pin from Map tab used as report coordinates',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                TextField(
+                  controller: _locationController,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: 'Tap map to set coordinates',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: widget.onRequestPinTab,
+                  icon: const Icon(Icons.map_outlined),
+                  label: const Text('Go to Map tab to drop pin'),
+                ),
+              ],
             ),
           ),
+          if (selectedPoint != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(6, 2, 6, 10),
+              child: Text(
+                'Pin ready: ${selectedPoint.latitude.toStringAsFixed(6)}, ${selectedPoint.longitude.toStringAsFixed(6)}',
+                style: const TextStyle(
+                  color: Color(0xFF166534),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
           SectionCard(
             title: 'Waste Type',
             child: DropdownButtonFormField<String>(
@@ -111,15 +215,9 @@ class _ReportScreenState extends State<ReportScreen> {
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Day 1 shell only: submit wiring starts on Day 2.'),
-                  ),
-                );
-              },
+              onPressed: _isSubmitting ? null : _submitReport,
               icon: const Icon(Icons.send),
-              label: const Text('Submit Report (Static)'),
+              label: Text(_isSubmitting ? 'Submitting...' : 'Submit Report'),
             ),
           ),
         ],

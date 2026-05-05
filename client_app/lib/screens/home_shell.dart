@@ -3,9 +3,17 @@ import 'package:client_app/screens/directory_screen.dart';
 import 'package:client_app/screens/map_screen.dart';
 import 'package:client_app/screens/report_screen.dart';
 import 'package:client_app/screens/schedule_screen.dart';
+import 'package:latlong2/latlong.dart';
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key});
+  const HomeShell({
+    super.key,
+    this.onSignOut,
+    this.roleBadgeLabel = 'Citizen',
+  });
+
+  final VoidCallback? onSignOut;
+  final String roleBadgeLabel;
 
   @override
   State<HomeShell> createState() => _HomeShellState();
@@ -13,22 +21,64 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _selectedIndex = 0;
-
-  static const List<Widget> _tabs = <Widget>[
-    MapScreen(),
-    ReportScreen(),
-    ScheduleScreen(),
-    DirectoryScreen(),
-  ];
+  LatLng? _selectedReportPoint;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('TrashMap PH'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Text('TrashMap PH'),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                color: const Color(0xFFDCFCE7),
+              ),
+              child: Text(
+                widget.roleBadgeLabel,
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF166534),
+                ),
+              ),
+            ),
+          ],
+        ),
         centerTitle: false,
+        actions: <Widget>[
+          if (widget.onSignOut != null)
+            IconButton(
+              onPressed: widget.onSignOut,
+              icon: const Icon(Icons.logout),
+              tooltip: 'Logout',
+            ),
+        ],
       ),
-      body: _tabs[_selectedIndex],
+      body: <Widget>[
+        MapScreen(
+          selectedPoint: _selectedReportPoint,
+          onPinSelected: (LatLng point) {
+            setState(() {
+              _selectedReportPoint = point;
+            });
+          },
+        ),
+        ReportScreen(
+          selectedPoint: _selectedReportPoint,
+          onRequestPinTab: () {
+            setState(() {
+              _selectedIndex = 0;
+            });
+          },
+        ),
+        const ScheduleScreen(),
+        const DirectoryScreen(),
+      ][_selectedIndex],
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (int index) {
