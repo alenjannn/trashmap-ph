@@ -62,6 +62,7 @@ trashmap-ph/
 ## Screenshots
 ![LGU Dashboard](./assets/dashboard.png)
 ![Client App](./assets/client.png)
+![LGU Dashboard Live](./LGU%20DASHBOARD.png)
 
 ## Setup Instructions
 
