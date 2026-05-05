@@ -104,3 +104,17 @@ Then go to **Database → Extensions** and enable **PostGIS**.
 
 ## License
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Day 1 Progress Status
+- `A` Setup + structure scaffolded
+- `B` Supabase foundation schema expanded
+- `C` LGU dashboard static shell completed
+- `D` Flutter client static shell completed
+- `E` Shared UI baseline applied (web + mobile)
+- `F` Local-first validation + Day 2 handoff docs completed
+
+Detailed notes:
+- `docs/day1/block-a-setup.md`
+- `docs/day1/ui-baseline.md`
+- `docs/day1/block-f-validation.md`
+- `docs/day1/day2-handoff.md`
