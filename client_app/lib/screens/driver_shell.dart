@@ -25,7 +25,7 @@ class DriverShell extends StatelessWidget {
           SectionCard(
             title: 'Driver Console',
             child: Text(
-              'Role login ready. Driver verification flow queued for next phase.',
+              'Driver account active. Waiting for route dispatch assignments.',
             ),
           ),
           SizedBox(height: 12),

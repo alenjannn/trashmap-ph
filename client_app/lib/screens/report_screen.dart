@@ -20,7 +20,7 @@ class ReportScreen extends StatefulWidget {
 
 class _ReportScreenState extends State<ReportScreen> {
   final TextEditingController _locationController =
-      TextEditingController(text: 'Quezon City (GPS placeholder)');
+      TextEditingController(text: 'No map pin selected yet');
   final TextEditingController _descriptionController = TextEditingController();
   final ImagePicker _picker = ImagePicker();
   String _wasteType = 'Mixed';
@@ -77,7 +77,7 @@ class _ReportScreenState extends State<ReportScreen> {
       if (!mounted) return;
       _descriptionController.clear();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Report submitted. LGU feed will update in realtime phase.')),
+        const SnackBar(content: Text('Report submitted. LGU feed updates in realtime.')),
       );
     } catch (error) {
       if (!mounted) return;
@@ -129,7 +129,7 @@ class _ReportScreenState extends State<ReportScreen> {
           ),
           SectionCard(
             title: 'Photo Evidence',
-            subtitle: 'Photo picker ready. Upload storage next phase.',
+            subtitle: 'Attach supporting photo (optional)',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[

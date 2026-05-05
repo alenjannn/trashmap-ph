@@ -1,13 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { createClient } from "@supabase/supabase-js";
 import { useEffect, useMemo, useState } from "react";
 import {
   type DashboardPin,
-  fleetTrucks,
-  incidentFeed,
+  type FleetTruck,
+  type IncidentItem,
 } from "@/components/layout/dashboard-mock-data";
+import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { FleetStatusPanel } from "@/components/panels/fleet-status-panel";
 import { IncidentFeedPanel } from "@/components/panels/incident-feed-panel";
 
@@ -22,6 +22,7 @@ const LGUMap = dynamic(() => import("@/components/map/lgu-map").then((mod) => mo
 
 type ReportRow = {
   id: string;
+  created_at: string;
   lat: number;
   lng: number;
   report_type: "dumpsite" | "missed_pickup";
@@ -29,18 +30,43 @@ type ReportRow = {
   description: string | null;
 };
 
+type TruckRow = {
+  id: string;
+  truck_code: string;
+  driver_name: string | null;
+  status: "idle" | "en_route" | "collecting" | "maintenance" | "offline";
+};
+
+type HotspotRow = {
+  id: string;
+  center_lat: number;
+  center_lng: number;
+  severity: "low" | "medium" | "high" | "critical";
+  unique_reporters_count: number;
+  radius_meters: number;
+  status: "active" | "cleared";
+};
+
+function formatCreatedAgo(createdAt: string): string {
+  const now = Date.now();
+  const created = new Date(createdAt).getTime();
+  const diffMinutes = Math.max(1, Math.floor((now - created) / 60000));
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h`;
+  return `${Math.floor(diffHours / 24)}d`;
+}
+
 export function DashboardShell() {
-  const [pins, setPins] = useState<DashboardPin[]>([]);
+  const [reportPins, setReportPins] = useState<DashboardPin[]>([]);
+  const [hotspotPins, setHotspotPins] = useState<DashboardPin[]>([]);
+  const [fleet, setFleet] = useState<FleetTruck[]>([]);
+  const [incidents, setIncidents] = useState<IncidentItem[]>([]);
   const [isLoadingPins, setIsLoadingPins] = useState(true);
   const [pinError, setPinError] = useState<string | null>(null);
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  const supabase = useMemo(() => {
-    if (!supabaseUrl || !supabaseAnonKey) return null;
-    return createClient(supabaseUrl, supabaseAnonKey);
-  }, [supabaseAnonKey, supabaseUrl]);
+  const supabase = getBrowserSupabaseClient();
+  const pins = useMemo(() => [...reportPins, ...hotspotPins], [hotspotPins, reportPins]);
 
   const configError = !supabase ? "Supabase environment is not configured." : null;
 
@@ -59,11 +85,48 @@ export function DashboardShell() {
       };
     }
 
+    function mapReportToIncident(report: ReportRow): IncidentItem {
+      const type = report.report_type;
+      return {
+        id: report.id,
+        type,
+        title: report.description?.trim() || "Citizen report submitted",
+        locationLabel: `${report.lat.toFixed(5)}, ${report.lng.toFixed(5)}`,
+        createdAgo: formatCreatedAgo(report.created_at),
+        severity: type === "missed_pickup" ? "medium" : "high",
+      };
+    }
+
+    function mapHotspotToPin(row: HotspotRow): DashboardPin {
+      return {
+        id: `hotspot-${row.id}`,
+        lat: row.center_lat,
+        lng: row.center_lng,
+        type: "hotspot",
+        label: `${row.severity.toUpperCase()} hotspot (${row.unique_reporters_count} reporters, ${row.radius_meters}m)`,
+        wasteType: "unknown",
+        radiusMeters: row.radius_meters,
+      };
+    }
+
+    function mapTruckToFleet(row: TruckRow): FleetTruck {
+      const status =
+        row.status === "offline" ? "idle" : (row.status as FleetTruck["status"]);
+      return {
+        id: row.id,
+        code: row.truck_code,
+        driver: row.driver_name ?? "Unassigned",
+        status,
+        progressPercent: 0,
+        lastSeen: "live",
+      };
+    }
+
     async function loadReports() {
       setIsLoadingPins(true);
       const { data, error } = await client
         .from("reports")
-        .select("id, lat, lng, report_type, waste_type, description")
+        .select("id, created_at, lat, lng, report_type, waste_type, description")
         .order("created_at", { ascending: false })
         .limit(250);
 
@@ -73,15 +136,42 @@ export function DashboardShell() {
         return;
       }
 
-      setPins((data ?? []).map((row) => mapReportToPin(row as ReportRow)));
+      const mappedRows = (data ?? []).map((row) => row as ReportRow);
+      setReportPins(mappedRows.map((row) => mapReportToPin(row)));
+      setIncidents(mappedRows.slice(0, 12).map((row) => mapReportToIncident(row)));
       setPinError(null);
       setIsLoadingPins(false);
     }
 
-    void loadReports();
+    async function loadHotspots() {
+      const { data, error } = await client
+        .from("hotspots")
+        .select("id, center_lat, center_lng, severity, unique_reporters_count, radius_meters, status")
+        .eq("status", "active")
+        .order("updated_at", { ascending: false })
+        .limit(200);
+      if (error) return;
+      const rows = (data ?? []).map((row) => row as HotspotRow);
+      setHotspotPins(rows.map((row) => mapHotspotToPin(row)));
+    }
 
-    const channel = client
-      .channel("dashboard-reports-live")
+    async function loadFleet() {
+      const { data, error } = await client
+        .from("trucks")
+        .select("id, truck_code, driver_name, status")
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (error) return;
+      const rows = (data ?? []).map((row) => row as TruckRow);
+      setFleet(rows.map((row) => mapTruckToFleet(row)));
+    }
+
+    void loadReports();
+    void loadHotspots();
+    void loadFleet();
+
+    const reportsChannel = client
+      .channel("dashboard-reports-live-v2")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "reports" },
@@ -91,8 +181,32 @@ export function DashboardShell() {
       )
       .subscribe();
 
+    const trucksChannel = client
+      .channel("dashboard-trucks-live-v2")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "trucks" },
+        () => {
+          void loadFleet();
+        },
+      )
+      .subscribe();
+
+    const hotspotsChannel = client
+      .channel("dashboard-hotspots-live-v1")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "hotspots" },
+        () => {
+          void loadHotspots();
+        },
+      )
+      .subscribe();
+
     return () => {
-      void client.removeChannel(channel);
+      void client.removeChannel(reportsChannel);
+      void client.removeChannel(trucksChannel);
+      void client.removeChannel(hotspotsChannel);
     };
   }, [supabase]);
 
@@ -105,7 +219,7 @@ export function DashboardShell() {
             <h1 className="text-xl font-semibold text-zinc-900">LGU Live Operations Dashboard</h1>
           </div>
           <div className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
-            Day 1 Static Shell
+            Live Data Mode
           </div>
         </div>
       </header>
@@ -149,8 +263,8 @@ export function DashboardShell() {
         </section>
 
         <aside className="space-y-4">
-          <FleetStatusPanel trucks={fleetTrucks} />
-          <IncidentFeedPanel incidents={incidentFeed} />
+          <FleetStatusPanel trucks={fleet} />
+          <IncidentFeedPanel incidents={incidents} />
         </aside>
       </main>
     </div>

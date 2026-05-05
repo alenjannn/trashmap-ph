@@ -18,6 +18,11 @@ export function FleetStatusPanel({ trucks }: Props) {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-800">Fleet Status</h2>
         <span className="rounded-full bg-zinc-100 px-2 py-1 text-xs text-zinc-600">{trucks.length} trucks</span>
       </div>
+      {trucks.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-zinc-200 p-3 text-sm text-zinc-500">
+          No fleet records yet.
+        </p>
+      ) : null}
 
       <ul className="space-y-3">
         {trucks.map((truck) => (

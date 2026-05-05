@@ -14,6 +14,11 @@ export function IncidentFeedPanel({ incidents }: Props) {
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
       <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-800">Live Incident Feed</h2>
+      {incidents.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-zinc-200 p-3 text-sm text-zinc-500">
+          No live incidents yet.
+        </p>
+      ) : null}
       <ul className="space-y-3">
         {incidents.map((incident) => (
           <li key={incident.id} className="rounded-xl border border-zinc-100 p-3">

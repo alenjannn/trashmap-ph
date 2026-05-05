@@ -58,6 +58,112 @@ create table if not exists hotspots (
 
 create index if not exists idx_hotspots_center_location on hotspots using gist (center_location);
 
+create or replace function public.refresh_hotspots_from_reports()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Rebuild active hotspots from recent unresolved reports using tight 1-10m pin neighborhoods.
+  -- Radius auto-scales by cluster spread, clamped to 10m..200m.
+  delete from public.hotspots where status = 'active';
+
+  insert into public.hotspots (
+    center_lat,
+    center_lng,
+    radius_meters,
+    unique_reporters_count,
+    status,
+    severity,
+    created_at,
+    updated_at
+  )
+  with clustered as (
+    select
+      r.id,
+      r.lat,
+      r.lng,
+      r.reporter_id,
+      st_transform(r.location::geometry, 3857) as location_m,
+      st_clusterdbscan(
+        st_transform(r.location::geometry, 3857),
+        eps := 25,
+        minpoints := 10
+      ) over () as cluster_id
+    from public.reports r
+    where r.created_at >= now() - interval '7 days'
+      and r.status in ('pending', 'acknowledged', 'dispatched')
+  ),
+  grouped as (
+    select
+      cluster_id,
+      st_centroid(st_collect(location_m)) as centroid_m,
+      avg(lat) as center_lat,
+      avg(lng) as center_lng,
+      count(*) as report_count,
+      count(distinct reporter_id) as unique_reporters_count
+    from clustered
+    where cluster_id is not null
+    group by cluster_id
+    having count(*) >= 10
+  ),
+  spread as (
+    select
+      g.cluster_id,
+      g.center_lat,
+      g.center_lng,
+      g.report_count,
+      g.unique_reporters_count,
+      max(st_distance(c.location_m, g.centroid_m)) as max_pin_distance_m
+    from grouped g
+    join clustered c on c.cluster_id = g.cluster_id
+    group by
+      g.cluster_id,
+      g.center_lat,
+      g.center_lng,
+      g.report_count,
+      g.unique_reporters_count
+  )
+  select
+    s.center_lat,
+    s.center_lng,
+    least(200, greatest(10, ceil(s.max_pin_distance_m + 10)))::integer as radius_meters,
+    s.unique_reporters_count,
+    'active' as status,
+    case
+      when s.report_count >= 20 then 'critical'
+      when s.report_count >= 14 then 'high'
+      when s.report_count >= 10 then 'medium'
+      else 'low'
+    end as severity,
+    now() as created_at,
+    now() as updated_at
+  from spread s;
+end;
+$$;
+
+drop trigger if exists trg_refresh_hotspots_on_reports on public.reports;
+create or replace function public.refresh_hotspots_on_reports_trigger()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.refresh_hotspots_from_reports();
+  return null;
+end;
+$$;
+
+create trigger trg_refresh_hotspots_on_reports
+  after insert or update or delete on public.reports
+  for each statement
+  execute procedure public.refresh_hotspots_on_reports_trigger();
+
+-- Initial build for existing reports.
+select public.refresh_hotspots_from_reports();
+
 -- Collection fleet registry
 create table if not exists trucks (
   id uuid default gen_random_uuid() primary key,
@@ -202,6 +308,15 @@ begin
 exception when duplicate_object then
   null;
 end $$;
+
+-- Demo RLS for hotspot visibility in dashboard.
+alter table public.hotspots enable row level security;
+drop policy if exists "hotspots_select_anon_demo" on public.hotspots;
+create policy "hotspots_select_anon_demo"
+on public.hotspots
+for select
+to anon, authenticated
+using (true);
 
 do $$
 begin

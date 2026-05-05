@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:client_app/services/supabase_service.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({
@@ -18,11 +20,23 @@ class MapScreen extends StatefulWidget {
 
 class _MapScreenState extends State<MapScreen> {
   late LatLng? _localSelectedPoint;
+  List<LatLng> _liveReportPins = <LatLng>[];
+  RealtimeChannel? _reportsChannel;
 
   @override
   void initState() {
     super.initState();
     _localSelectedPoint = widget.selectedPoint;
+    _loadLiveReportPins();
+    _reportsChannel = SupabaseService.client
+        .channel('mobile-map-reports-live-v1')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'reports',
+          callback: (_) => _loadLiveReportPins(),
+        )
+        .subscribe();
   }
 
   @override
@@ -34,13 +48,33 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   @override
+  void dispose() {
+    final RealtimeChannel? channel = _reportsChannel;
+    if (channel != null) {
+      SupabaseService.client.removeChannel(channel);
+    }
+    super.dispose();
+  }
+
+  Future<void> _loadLiveReportPins() async {
+    final response = await SupabaseService.client
+        .from('reports')
+        .select('lat, lng')
+        .order('created_at', ascending: false)
+        .limit(300);
+
+    if (!mounted) return;
+    final List<dynamic> rows = response as List<dynamic>;
+    setState(() {
+      _liveReportPins = rows
+          .map((dynamic row) => LatLng((row['lat'] as num).toDouble(), (row['lng'] as num).toDouble()))
+          .toList();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     const LatLng qcCenter = LatLng(14.676, 121.0437);
-    const List<LatLng> mockPins = <LatLng>[
-      LatLng(14.676, 121.0437),
-      LatLng(14.6738, 121.0471),
-      LatLng(14.6784, 121.0490),
-    ];
 
     return Column(
       children: <Widget>[
@@ -85,7 +119,7 @@ class _MapScreenState extends State<MapScreen> {
                     userAgentPackageName: 'com.trashmapph.client_app',
                   ),
                   MarkerLayer(
-                    markers: mockPins
+                    markers: _liveReportPins
                         .map(
                           (LatLng point) => Marker(
                             point: point,
