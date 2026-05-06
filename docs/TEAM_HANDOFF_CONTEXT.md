@@ -32,13 +32,45 @@ TrashMap PH is split into 3 connected parts:
 5. Postgres trigger runs hotspot refresh logic.
 6. Hotspots stored in `hotspots` table and rendered on LGU map.
 
+## Day-by-Day Build Summary (Day 1 to Day 3)
+### Day 1 - Foundation and UI Shells
+- Project scaffolding completed for web (`Next.js`) and mobile (`Flutter`).
+- Initial role-aware UI shell established for `admin`, `citizen`, and `driver`.
+- Core Supabase project setup prepared (`Auth`, `Database`, `Realtime`, `PostGIS`).
+
+### Day 2 - Core Data Flow and Live Map
+- Citizen report pipeline connected end-to-end (mobile submit -> `reports` table).
+- LGU dashboard map migrated from mock pins to live Supabase data.
+- Realtime subscriptions enabled so new reports appear without refresh.
+- Hotspot generation implemented in database trigger/function workflow.
+- Incident feed panel added and tied to incoming live report stream.
+
+### Day 3 - Route Optimization and Driver Operations
+- Added route stack in schema: `routes`, `route_stops`, `route_progress`.
+- Implemented optimizer service in `src/lib/route-optimizer.ts`:
+  - ORS integration (`ORS_API_KEY`) for distance/ETA estimates.
+  - Automatic fallback to mock estimator when ORS fails/unavailable.
+- Added APIs:
+  - `POST /api/optimize-routes` (manual optimize trigger)
+  - `POST /api/optimize-routes/scheduled` (cron/secret protected trigger)
+  - `POST /api/demo/day3-seed` (deterministic demo seed)
+- LGU dashboard upgraded:
+  - Route polylines rendered on map.
+  - Realtime route/progress subscriptions integrated.
+  - Fleet status reflects route progress.
+  - Fuel savings panel added for demo KPI storytelling.
+- Flutter driver mode upgraded:
+  - Driver sees assigned route + ordered stops.
+  - Driver confirms pickups and updates progress in Supabase.
+  - LGU dashboard reflects updates in near real time.
+
 ## Current Implementation Status (Important)
-- Auth and role routing are active (`admin`, `citizen`, `driver`).
-- Dashboard uses live Supabase data and Realtime (no static mock pins).
-- Hotspot generation is in Postgres trigger/function flow in `supabase/schema.sql`.
-- Hotspot map rendering uses meter-based circle radius + zoom-aware overlay behavior.
-- Flutter app has live report fetch + realtime map updates.
-- Photo picker UI exists in Flutter report screen.
+- Auth and role routing active (`admin`, `citizen`, `driver`).
+- Dashboard now realtime for `reports`, `hotspots`, `routes`, `route_stops`, `route_progress`.
+- Hotspot rendering keeps red hotspot indicator visible over orange report pins.
+- Route optimization supports ORS-first with resilient fallback mode.
+- Driver route confirmation flow active in Flutter app.
+- Demo seeding/rehearsal flow available for repeatable hackathon run.
 - **Not fully finished yet:** photo upload to Supabase Storage + storing `photo_url` in report row.
 - **Not fully finished yet:** dedicated Flutter missed-pickup submission flow (DB supports type already).
 
@@ -255,6 +287,18 @@ Then open PR to `main` and request main developer review.
 - Respect role-based access behavior (`admin`, `citizen`, `driver`).
 - Do not alter hotspot SQL thresholds/logic without explicit team decision.
 - Treat this file as source of truth for onboarding and workflow policy.
+
+## Agentic IDE Fast Context (For New Teammate)
+- Start by reading this file, then `supabase/schema.sql`, then `src/components/layout/dashboard-shell.tsx`.
+- When debugging route flow, inspect in order:
+  1. `src/lib/route-optimizer.ts`
+  2. `src/app/api/optimize-routes/route.ts`
+  3. `src/app/api/optimize-routes/scheduled/route.ts`
+  4. `client_app/lib/screens/driver_shell.dart`
+- Always verify env:
+  - Web `.env.local`: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ORS_API_KEY`, `OPTIMIZER_CRON_SECRET`, `DEMO_SEED_SECRET`
+  - Flutter run defines: `SUPABASE_URL`, `SUPABASE_ANON_KEY`
+- For demo reset, call `POST /api/demo/day3-seed` with `Authorization: Bearer <DEMO_SEED_SECRET>`.
 
 ## Known Next Priorities
 1. Finish photo upload to Supabase Storage from Flutter report flow.
