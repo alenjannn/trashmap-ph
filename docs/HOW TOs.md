@@ -142,3 +142,71 @@ Tip:
 - Each teammate uses own Supabase project + own keys on own machine.
 - Never commit real keys/secrets to git.
 - Share only placeholders in docs and `.env` templates.
+
+## HOW TO 13: Day 4 Route Operations Setup
+Day 4 route operations require one more server secret:
+- `ROUTE_OPS_SECRET`
+
+Update root `.env.local`:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_legacy_jwt
+ORS_API_KEY=your_openrouteservice_api_key
+OPTIMIZER_CRON_SECRET=your_random_secret
+DEMO_SEED_SECRET=your_random_secret
+ROUTE_OPS_SECRET=your_strong_route_ops_secret
+```
+
+Restart dev server after env changes:
+```bash
+npm run dev
+```
+
+## HOW TO 14: Day 4 Admin Weekly Route Flow
+1. Open LGU dashboard route planner.
+2. Click **Create Weekly Route**.
+3. Click collection points on map in desired order.
+4. Click **Confirm Route**.
+5. In modal, fill:
+   - Route name
+   - Recurrence day
+   - Ops token (`ROUTE_OPS_SECRET` value)
+6. Click **Create Route**.
+7. Assign driver now or later in Route Assignment panel.
+
+Expected result:
+- New template saved (`route_templates`, `route_template_stops`)
+- Assignment reflected in dashboard
+- Audit logs visible in live route timeline
+
+## HOW TO 15: Day 4 Driver Start/End and Pickup Flow
+1. Login as driver in Flutter app.
+2. Confirm assigned route appears.
+3. Tap **Start Route**.
+4. Confirm pickup per stop.
+5. Tap **End Route**.
+
+Expected result:
+- Route status moves through `in_progress` -> `completed` / `completed_with_issues`
+- Pickup confirmations update dashboard live
+- Route audit and notification logs written
+
+## HOW TO 16: Day 4 Notification Verification
+Verify these notifications are emitted:
+- `route_started` (admin + citizen zone)
+- `truck_arriving` (admin + citizen zone)
+- `route_completed` (admin + citizen zone)
+
+Check tables:
+- `route_notifications_log`
+- `route_audit_logs`
+
+## HOW TO 17: Day 4 Common Errors + Fix
+- Error: `invalid input syntax for type uuid: ""` in driver app
+  - Cause: empty route ID or user ID used in UUID filter.
+  - Fix: ensure driver route load skips route query when assignment not found.
+- Error: `Unauthorized route ops request`
+  - Cause: wrong/missing ops token.
+  - Fix: set `ROUTE_OPS_SECRET` in `.env.local`, restart server, input exact same token in admin modal.

@@ -32,7 +32,7 @@ TrashMap PH is split into 3 connected parts:
 5. Postgres trigger runs hotspot refresh logic.
 6. Hotspots stored in `hotspots` table and rendered on LGU map.
 
-## Day-by-Day Build Summary (Day 1 to Day 3)
+## Day-by-Day Build Summary (Day 1 to Day 4)
 ### Day 1 - Foundation and UI Shells
 - Project scaffolding completed for web (`Next.js`) and mobile (`Flutter`).
 - Initial role-aware UI shell established for `admin`, `citizen`, and `driver`.
@@ -64,14 +64,37 @@ TrashMap PH is split into 3 connected parts:
   - Driver confirms pickups and updates progress in Supabase.
   - LGU dashboard reflects updates in near real time.
 
+### Day 4 - Full Feature Completion and Polish
+- Added Day 4 schema stack:
+  - `collection_points`
+  - `risk_zones`
+  - `gamification_points`
+  - `report_verifications`
+- Added collection-point-first route planning in optimizer.
+- Updated web map legend + semantics:
+  - orange = `Reported Garbage Point`
+  - teal = `Collection Point`
+  - red = `Hotspot`
+  - blue = `Missed Pickup`
+  - green = `Routes`
+  - amber = `Risk Zone`
+- Removed Fuel Savings panel from active dashboard UI.
+- Added dashboard panels:
+  - `Risk Zones`
+  - `Barangay Leaderboard`
+- Flutter updates shipped:
+  - Live `Schedule` tab from `schedules`
+  - Live `Directory` tab from `recyclers` (list + map + details)
+  - New `Rewards` tab (points + leaderboard + before/after verification submit)
+- Added `POST /api/demo/day4-seed` endpoint for deterministic Day 4 reset.
+
 ## Current Implementation Status (Important)
 - Auth and role routing active (`admin`, `citizen`, `driver`).
-- Dashboard now realtime for `reports`, `hotspots`, `routes`, `route_stops`, `route_progress`.
+- Dashboard now realtime for `reports`, `hotspots`, `collection_points`, `risk_zones`, `routes`, `route_stops`, `route_progress`.
 - Hotspot rendering keeps red hotspot indicator visible over orange report pins.
-- Route optimization supports ORS-first with resilient fallback mode.
+- Route optimization supports ORS-first with resilient fallback mode and collection-point-first stop selection.
 - Driver route confirmation flow active in Flutter app.
-- Demo seeding/rehearsal flow available for repeatable hackathon run.
-- **Not fully finished yet:** photo upload to Supabase Storage + storing `photo_url` in report row.
+- Demo seeding/rehearsal flow available for repeatable hackathon run (`/api/demo/day3-seed`, `/api/demo/day4-seed`).
 - **Not fully finished yet:** dedicated Flutter missed-pickup submission flow (DB supports type already).
 
 ## Quick Repo Map
@@ -298,9 +321,38 @@ Then open PR to `main` and request main developer review.
 - Always verify env:
   - Web `.env.local`: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ORS_API_KEY`, `OPTIMIZER_CRON_SECRET`, `DEMO_SEED_SECRET`
   - Flutter run defines: `SUPABASE_URL`, `SUPABASE_ANON_KEY`
-- For demo reset, call `POST /api/demo/day3-seed` with `Authorization: Bearer <DEMO_SEED_SECRET>`.
+- For Day 3 reset, call `POST /api/demo/day3-seed` with `Authorization: Bearer <DEMO_SEED_SECRET>`.
+- For Day 4 full reset, call `POST /api/demo/day4-seed` with `Authorization: Bearer <DEMO_SEED_SECRET>`.
 
 ## Known Next Priorities
-1. Finish photo upload to Supabase Storage from Flutter report flow.
-2. Add dedicated Flutter missed-pickup report submission screen/flow.
-3. Continue map UX polish while preserving current hotspot visibility behavior.
+1. Add dedicated Flutter missed-pickup report submission screen/flow.
+2. Harden Supabase Storage policy checklist for `report-photos` verification uploads.
+3. Continue map UX polish while preserving hotspot and risk-zone readability.
+
+## Day 4 Handoff Addendum (Latest)
+### Scope Completed
+- Admin route planner supports map-based weekly route drafting from `collection_points`.
+- Route confirmation modal includes recurrence day + route ops token input.
+- Admin can assign drivers for planned routes (manual/auto support in APIs).
+- Driver app supports route lifecycle actions: `Start Route`, per-stop pickup confirmation, `End Route`.
+- Dashboard now reflects pickup confirmations and route status changes through realtime-backed refresh flows.
+- Citizen and admin notifications wired for route lifecycle events (`route_started`, `truck_arriving`, `route_completed`).
+- Route audit trail persisted in `route_audit_logs` for timeline/history visibility.
+
+### Day 4 Runtime Requirements
+- `ROUTE_OPS_SECRET` must exist in web `.env.local`.
+- Dashboard route operations must send matching ops token to protected APIs.
+- Database schema changes in `supabase/schema.sql` must be applied (includes route assignment and notification dedupe constraints).
+
+### Day 4 Validation Checklist
+1. Create weekly route from dashboard map and confirm template is saved.
+2. Assign driver to created route.
+3. In driver app, start route and complete at least one stop.
+4. Confirm pickup appears in admin pickup report/timeline.
+5. Trigger arriving alert and verify citizen/admin notification visibility.
+6. End route and verify final status + audit entries.
+
+### Known Fixed Defect (Driver UUID Error)
+- Symptom: `PostgrestException(... invalid input syntax for type uuid: "", code: 22P02 ...)`.
+- Root cause: empty UUID value used in route query filter when no assignment/user ID existed.
+- Fix applied in `client_app/lib/screens/driver_shell.dart`: early return when `userId` or `assignedRouteId` missing, no UUID query issued with empty string.
