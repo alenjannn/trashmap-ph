@@ -195,6 +195,79 @@ create table if not exists routes (
 
 create index if not exists idx_routes_date_status on routes (route_date, status);
 
+-- Ordered route stops for each generated route
+create table if not exists route_stops (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz not null default now(),
+  route_id uuid not null references routes(id) on delete cascade,
+  stop_order integer not null check (stop_order > 0),
+  label text not null,
+  lat double precision not null,
+  lng double precision not null,
+  location geography(point, 4326) generated always as (
+    st_setsrid(st_makepoint(lng, lat), 4326)::geography
+  ) stored,
+  stop_type text not null default 'pickup'
+    check (stop_type in ('pickup', 'transfer', 'disposal', 'other')),
+  eta timestamptz,
+  status text not null default 'pending'
+    check (status in ('pending', 'arrived', 'completed', 'skipped'))
+);
+
+create unique index if not exists idx_route_stops_unique_order on route_stops (route_id, stop_order);
+create index if not exists idx_route_stops_route on route_stops (route_id);
+create index if not exists idx_route_stops_location on route_stops using gist (location);
+
+-- Driver and fleet progress events per stop
+create table if not exists route_progress (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  route_id uuid not null references routes(id) on delete cascade,
+  stop_id uuid references route_stops(id) on delete set null,
+  truck_id uuid not null references trucks(id) on delete cascade,
+  driver_id uuid references auth.users(id),
+  status text not null default 'pending'
+    check (status in ('pending', 'arrived', 'completed', 'skipped')),
+  confirmed_at timestamptz,
+  notes text
+);
+
+create index if not exists idx_route_progress_route on route_progress (route_id, created_at desc);
+create index if not exists idx_route_progress_truck on route_progress (truck_id, created_at desc);
+create index if not exists idx_route_progress_driver on route_progress (driver_id, created_at desc);
+
+-- Convenience view for today's assigned route with ordered stops and latest progress.
+create or replace view public.v_driver_route_stops_today as
+select
+  r.id as route_id,
+  r.route_date,
+  r.truck_id,
+  t.truck_code,
+  r.status as route_status,
+  r.polyline,
+  rs.id as stop_id,
+  rs.stop_order,
+  rs.label as stop_label,
+  rs.lat,
+  rs.lng,
+  rs.stop_type,
+  rs.eta,
+  coalesce(rp_latest.status, rs.status) as stop_status,
+  rp_latest.confirmed_at
+from routes r
+join trucks t on t.id = r.truck_id
+join route_stops rs on rs.route_id = r.id
+left join lateral (
+  select rp.status, rp.confirmed_at
+  from route_progress rp
+  where rp.route_id = r.id
+    and (rp.stop_id = rs.id or rp.stop_id is null)
+  order by rp.created_at desc
+  limit 1
+) rp_latest on true
+where r.route_date = current_date;
+
 -- Published collection schedules visible to residents
 create table if not exists schedules (
   id uuid default gen_random_uuid() primary key,
@@ -321,6 +394,20 @@ using (true);
 do $$
 begin
   alter publication supabase_realtime add table routes;
+exception when duplicate_object then
+  null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table route_stops;
+exception when duplicate_object then
+  null;
+end $$;
+
+do $$
+begin
+  alter publication supabase_realtime add table route_progress;
 exception when duplicate_object then
   null;
 end $$;

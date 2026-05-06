@@ -8,6 +8,13 @@ export type DashboardPin = {
   radiusMeters?: number;
 };
 
+export type DashboardRoutePath = {
+  id: string;
+  truckLabel: string;
+  color: string;
+  points: [number, number][];
+};
+
 export type FleetTruck = {
   id: string;
   code: string;

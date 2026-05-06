@@ -3,12 +3,13 @@
 import "leaflet/dist/leaflet.css";
 import { LatLngBounds } from "leaflet";
 import { useEffect, useState } from "react";
-import { Circle, CircleMarker, MapContainer, Popup, TileLayer } from "react-leaflet";
+import { Circle, CircleMarker, MapContainer, Polyline, Popup, TileLayer } from "react-leaflet";
 import { useMap, useMapEvents } from "react-leaflet";
-import type { DashboardPin } from "@/components/layout/dashboard-mock-data";
+import type { DashboardPin, DashboardRoutePath } from "@/components/layout/dashboard-mock-data";
 
 type Props = {
   pins: DashboardPin[];
+  routes: DashboardRoutePath[];
 };
 
 const colorByType: Record<DashboardPin["type"], string> = {
@@ -17,19 +18,22 @@ const colorByType: Record<DashboardPin["type"], string> = {
   hotspot: "#ef4444",
 };
 
-function FitToPins({ pins }: { pins: DashboardPin[] }) {
+function FitToPins({ pins, routes }: { pins: DashboardPin[]; routes: DashboardRoutePath[] }) {
   const map = useMap();
 
   useEffect(() => {
-    if (pins.length === 0) return;
-    if (pins.length === 1) {
-      map.setView([pins[0].lat, pins[0].lng], 16);
+    const routePoints = routes.flatMap((route) => route.points);
+    const allPoints = [...pins.map((pin) => [pin.lat, pin.lng] as [number, number]), ...routePoints];
+
+    if (allPoints.length === 0) return;
+    if (allPoints.length === 1) {
+      map.setView(allPoints[0], 16);
       return;
     }
 
-    const bounds = new LatLngBounds(pins.map((pin) => [pin.lat, pin.lng] as [number, number]));
+    const bounds = new LatLngBounds(allPoints);
     map.fitBounds(bounds.pad(0.2));
-  }, [map, pins]);
+  }, [map, pins, routes]);
 
   return null;
 }
@@ -45,6 +49,10 @@ function EnsurePanes() {
     if (!map.getPane("report-pins")) {
       const pane = map.createPane("report-pins");
       pane.style.zIndex = "500";
+    }
+    if (!map.getPane("route-lines")) {
+      const pane = map.createPane("route-lines");
+      pane.style.zIndex = "430";
     }
     if (!map.getPane("hotspot-top")) {
       const pane = map.createPane("hotspot-top");
@@ -134,7 +142,7 @@ function ZoomAwareLayers({ hotspotPins, reportPins }: { hotspotPins: DashboardPi
   );
 }
 
-export function LGUMap({ pins }: Props) {
+export function LGUMap({ pins, routes }: Props) {
   const hotspotPins = pins.filter((pin) => pin.type === "hotspot");
   const reportPins = pins.filter((pin) => pin.type !== "hotspot");
 
@@ -150,7 +158,26 @@ export function LGUMap({ pins }: Props) {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <EnsurePanes />
-      <FitToPins pins={pins} />
+      <FitToPins pins={pins} routes={routes} />
+      {routes.map((route) => (
+        <Polyline
+          key={route.id}
+          positions={route.points}
+          pane="route-lines"
+          pathOptions={{
+            color: route.color,
+            weight: 4,
+            opacity: 0.85,
+          }}
+        >
+          <Popup>
+            <div className="space-y-1">
+              <p className="text-sm font-semibold uppercase tracking-wide">Optimized Route</p>
+              <p className="text-sm">{route.truckLabel}</p>
+            </div>
+          </Popup>
+        </Polyline>
+      ))}
       <ZoomAwareLayers hotspotPins={hotspotPins} reportPins={reportPins} />
     </MapContainer>
   );

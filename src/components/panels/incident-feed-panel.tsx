@@ -2,6 +2,7 @@ import type { IncidentItem } from "@/components/layout/dashboard-mock-data";
 
 type Props = {
   incidents: IncidentItem[];
+  title?: string;
 };
 
 const severityTone: Record<IncidentItem["severity"], string> = {
@@ -10,16 +11,16 @@ const severityTone: Record<IncidentItem["severity"], string> = {
   high: "text-red-700 bg-red-50",
 };
 
-export function IncidentFeedPanel({ incidents }: Props) {
+export function IncidentFeedPanel({ incidents, title = "Waste Report Feed" }: Props) {
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-800">Live Incident Feed</h2>
+      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-zinc-800">{title}</h2>
       {incidents.length === 0 ? (
         <p className="rounded-xl border border-dashed border-zinc-200 p-3 text-sm text-zinc-500">
           No live incidents yet.
         </p>
       ) : null}
-      <ul className="space-y-3">
+      <ul className="max-h-[360px] space-y-3 overflow-y-auto pr-1">
         {incidents.map((incident) => (
           <li key={incident.id} className="rounded-xl border border-zinc-100 p-3">
             <div className="flex items-center justify-between gap-2">
