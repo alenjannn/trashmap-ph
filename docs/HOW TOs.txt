@@ -44,7 +44,7 @@ PowerShell:
 Run twice. Use outputs as secrets.
 
 HOW TO 5: Configure Web .env.local
-Create root file .env.local:
+Create root file .env.local (Day 4 also needs ROUTE_OPS_SECRET — see HOW TO 13):
 
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
@@ -52,6 +52,7 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_legacy_jwt
 ORS_API_KEY=your_openrouteservice_api_key
 OPTIMIZER_CRON_SECRET=your_random_secret
 DEMO_SEED_SECRET=your_random_secret
+# ROUTE_OPS_SECRET=your_strong_route_ops_secret
 
 Restart dev server after changes:
 npm run dev
@@ -84,6 +85,7 @@ Specific emulator target example (emulator-5554) with explicit Flutter path:
 Tip:
 - Start emulator first in Android Studio Device Manager before flutter run.
 - Recheck connected devices anytime with flutter devices.
+- Demo logins: docs/TEST_ACCOUNTS.md or TEST_ACCOUNTS.txt
 
 HOW TO 9: Apply Database Schema
 1. Open Supabase SQL Editor.
@@ -95,17 +97,19 @@ HOW TO 9: Apply Database Schema
    - routes
    - route_stops
    - route_progress
+   - zones, collection_points, route_templates, route_assignments, etc.
+5. After pulling new code, re-run full script so RLS stays in sync (see HOW TO 18).
 
 HOW TO 10: Test Full Day 3 Flow
 1. Start web:
    npm run dev
 2. Seed deterministic demo data:
    curl -X POST http://localhost:3000/api/demo/day3-seed -H "Authorization: Bearer your_demo_seed_secret"
-3. Open LGU dashboard and confirm:
+3. Open LGU dashboard as admin and confirm:
    - report pins visible
    - hotspot circle visible
    - route polylines visible
-   - fleet + fuel savings panels updating
+   - fleet / route progress live (Fuel Savings panel removed from UI)
 4. Open Flutter driver mode and confirm pickup.
 5. Check LGU dashboard updates in near real time.
 
@@ -184,3 +188,13 @@ HOW TO 17: Day 4 Common Errors + Fix
 - Error: Unauthorized route ops request
   - Cause: wrong/missing ops token.
   - Fix: set ROUTE_OPS_SECRET in .env.local, restart server, input exact same token in admin modal.
+
+HOW TO 18: Row Level Security (empty data / permission errors)
+Symptoms: no routes or trucks on dashboard; policy/permission errors; driver cannot write stops.
+
+Checks:
+1. Re-apply supabase/schema.sql on the Supabase project you use.
+2. Dashboard: log in as admin (app_user_profiles.role = admin). Citizens/drivers do not get fleet-wide routes/trucks under RLS.
+3. Driver: need active route_assignments row for that auth user.
+4. Citizen/anon: reports, schedules, recyclers still readable; fleet tables are not.
+5. Optimizer / demo seed / ROUTE_OPS_SECRET APIs use service role — if those fail, check SUPABASE_SERVICE_ROLE_KEY.

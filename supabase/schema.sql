@@ -1,5 +1,6 @@
--- Day 1 foundation schema for TrashMap PH
--- Safe for repeated execution during local setup.
+-- TrashMap PH — Supabase schema (idempotent local/CI apply).
+-- Clients: anon + authenticated JWT; row-level security below.
+-- Service role (Next.js server, route optimizer, ROUTE_OPS_SECRET APIs) bypasses RLS.
 
 create extension if not exists pgcrypto;
 create extension if not exists postgis;
@@ -437,6 +438,7 @@ create table if not exists collection_points (
 
 create unique index if not exists idx_collection_points_label_unique on collection_points (label);
 create index if not exists idx_collection_points_location on collection_points using gist (location);
+create index if not exists idx_collection_points_zone_id on collection_points (zone_id) where zone_id is not null;
 
 -- Predicted risk zones for overflow awareness.
 create table if not exists risk_zones (
@@ -595,13 +597,19 @@ create policy "profiles_select_own"
   to authenticated
   using (auth.uid() = user_id);
 
--- Allow any authenticated user to list driver profiles (for admin assignment dropdown).
+-- Admins list driver profiles (assignment dropdown). Citizens/drivers do not read full driver roster.
 drop policy if exists "profiles_select_drivers" on public.app_user_profiles;
 create policy "profiles_select_drivers"
   on public.app_user_profiles
   for select
   to authenticated
-  using (role = 'driver');
+  using (
+    role = 'driver'
+    and exists (
+      select 1 from public.app_user_profiles p
+      where p.user_id = auth.uid() and p.role = 'admin'
+    )
+  );
 
 drop policy if exists "profiles_update_own" on public.app_user_profiles;
 create policy "profiles_update_own"
@@ -696,6 +704,253 @@ create trigger trg_award_points_on_route_progress_completed
   for each row
   execute procedure public.award_points_on_route_progress_completed();
 
+-- ---------------------------------------------------------------------------
+-- Public reference + fleet tables: RLS aligned with dashboard + driver apps.
+-- Admin: full read on routes/stops/progress/trucks. Driver: rows for active assignment only.
+-- ---------------------------------------------------------------------------
+
+alter table public.routes enable row level security;
+drop policy if exists "routes_select_admin_or_assigned" on public.routes;
+create policy "routes_select_admin_or_assigned"
+on public.routes
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = routes.id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+);
+drop policy if exists "routes_update_admin_or_assigned" on public.routes;
+create policy "routes_update_admin_or_assigned"
+on public.routes
+for update
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = routes.id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+)
+with check (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = routes.id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+);
+
+alter table public.route_stops enable row level security;
+drop policy if exists "route_stops_select_admin_or_assigned" on public.route_stops;
+create policy "route_stops_select_admin_or_assigned"
+on public.route_stops
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = route_stops.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+);
+drop policy if exists "route_stops_update_admin_or_assigned" on public.route_stops;
+create policy "route_stops_update_admin_or_assigned"
+on public.route_stops
+for update
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = route_stops.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+)
+with check (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = route_stops.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+);
+
+alter table public.route_progress enable row level security;
+drop policy if exists "route_progress_select_admin_or_assigned" on public.route_progress;
+create policy "route_progress_select_admin_or_assigned"
+on public.route_progress
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = route_progress.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+);
+drop policy if exists "route_progress_insert_admin_or_assigned" on public.route_progress;
+create policy "route_progress_insert_admin_or_assigned"
+on public.route_progress
+for insert
+to authenticated
+with check (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = route_progress.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+);
+drop policy if exists "route_progress_update_admin_or_assigned" on public.route_progress;
+create policy "route_progress_update_admin_or_assigned"
+on public.route_progress
+for update
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = route_progress.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+)
+with check (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1 from public.route_assignments ra
+    where ra.route_id = route_progress.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
+);
+
+alter table public.trucks enable row level security;
+drop policy if exists "trucks_select_admin_or_assigned" on public.trucks;
+create policy "trucks_select_admin_or_assigned"
+on public.trucks
+for select
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1
+    from public.routes r
+    join public.route_assignments ra on ra.route_id = r.id and ra.is_active = true
+    where r.truck_id = trucks.id
+      and ra.driver_id = auth.uid()
+  )
+);
+drop policy if exists "trucks_update_admin_or_assigned" on public.trucks;
+create policy "trucks_update_admin_or_assigned"
+on public.trucks
+for update
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1
+    from public.routes r
+    join public.route_assignments ra on ra.route_id = r.id and ra.is_active = true
+    where r.truck_id = trucks.id
+      and ra.driver_id = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+  or exists (
+    select 1
+    from public.routes r
+    join public.route_assignments ra on ra.route_id = r.id and ra.is_active = true
+    where r.truck_id = trucks.id
+      and ra.driver_id = auth.uid()
+  )
+);
+
+alter table public.reports enable row level security;
+drop policy if exists "reports_select_public" on public.reports;
+create policy "reports_select_public"
+on public.reports
+for select
+to anon, authenticated
+using (true);
+drop policy if exists "reports_insert_public" on public.reports;
+create policy "reports_insert_public"
+on public.reports
+for insert
+to anon, authenticated
+with check (true);
+
+alter table public.schedules enable row level security;
+drop policy if exists "schedules_select_public" on public.schedules;
+create policy "schedules_select_public"
+on public.schedules
+for select
+to anon, authenticated
+using (true);
+
+alter table public.recyclers enable row level security;
+drop policy if exists "recyclers_select_public" on public.recyclers;
+create policy "recyclers_select_public"
+on public.recyclers
+for select
+to anon, authenticated
+using (true);
+
 create or replace function public.award_points_on_report_verification()
 returns trigger
 language plpgsql
@@ -773,6 +1028,18 @@ for update
 to authenticated
 using (true)
 with check (true);
+
+drop policy if exists "collection_points_delete_admin" on public.collection_points;
+create policy "collection_points_delete_admin"
+on public.collection_points
+for delete
+to authenticated
+using (
+  exists (
+    select 1 from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  )
+);
 
 alter table public.risk_zones enable row level security;
 drop policy if exists "risk_zones_select_public" on public.risk_zones;
@@ -1020,6 +1287,13 @@ using (
     select 1 from public.app_user_profiles p
     where p.user_id = auth.uid() and p.role = 'admin'
   )
+  or exists (
+    select 1
+    from public.route_assignments ra
+    where ra.route_id = route_notifications_log.route_id
+      and ra.driver_id = auth.uid()
+      and ra.is_active = true
+  )
   or (
     target_scope in ('citizen_zone', 'both')
     and exists (
@@ -1134,3 +1408,154 @@ begin
 exception when duplicate_object then
   null;
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- DEV test accounts — Supabase Auth (email/password). Password both: 123456.
+-- Idempotent: skips if email already exists in auth.users.
+-- LGU dashboard admin gate uses public.admin_access_secrets (admin123 / admin123),
+-- not Supabase Auth. Remove or replace credentials before production.
+-- ---------------------------------------------------------------------------
+
+do $$
+declare
+  citizen_id uuid := 'b2c3d4e5-f6a7-5b8c-9d0e-1f2a3b4c5d01';
+  driver_id uuid := 'b2c3d4e5-f6a7-5b8c-9d0e-1f2a3b4c5d02';
+  enc_citizen text := crypt('123456', gen_salt('bf'));
+  enc_driver text := crypt('123456', gen_salt('bf'));
+begin
+  if not exists (select 1 from auth.users where email = 'chiefestrabon04@gmail.com') then
+    insert into auth.users (
+      id,
+      instance_id,
+      aud,
+      role,
+      email,
+      encrypted_password,
+      email_confirmed_at,
+      raw_app_meta_data,
+      raw_user_meta_data,
+      created_at,
+      updated_at,
+      confirmation_token,
+      email_change,
+      email_change_token_new,
+      recovery_token
+    )
+    values (
+      citizen_id,
+      '00000000-0000-0000-0000-000000000000',
+      'authenticated',
+      'authenticated',
+      'chiefestrabon04@gmail.com',
+      enc_citizen,
+      now(),
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      '{"requested_role":"citizen"}'::jsonb,
+      now(),
+      now(),
+      '',
+      '',
+      '',
+      ''
+    );
+    insert into auth.identities (
+      id,
+      user_id,
+      identity_data,
+      provider,
+      provider_id,
+      last_sign_in_at,
+      created_at,
+      updated_at
+    )
+    values (
+      citizen_id,
+      citizen_id,
+      format('{"sub":"%s","email":"chiefestrabon04@gmail.com"}', citizen_id)::jsonb,
+      'email',
+      citizen_id::text,
+      now(),
+      now(),
+      now()
+    );
+  end if;
+
+  if not exists (select 1 from auth.users where email = 'distresscode04@gmail.com') then
+    insert into auth.users (
+      id,
+      instance_id,
+      aud,
+      role,
+      email,
+      encrypted_password,
+      email_confirmed_at,
+      raw_app_meta_data,
+      raw_user_meta_data,
+      created_at,
+      updated_at,
+      confirmation_token,
+      email_change,
+      email_change_token_new,
+      recovery_token
+    )
+    values (
+      driver_id,
+      '00000000-0000-0000-0000-000000000000',
+      'authenticated',
+      'authenticated',
+      'distresscode04@gmail.com',
+      enc_driver,
+      now(),
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      '{"requested_role":"driver"}'::jsonb,
+      now(),
+      now(),
+      '',
+      '',
+      '',
+      ''
+    );
+    insert into auth.identities (
+      id,
+      user_id,
+      identity_data,
+      provider,
+      provider_id,
+      last_sign_in_at,
+      created_at,
+      updated_at
+    )
+    values (
+      driver_id,
+      driver_id,
+      format('{"sub":"%s","email":"distresscode04@gmail.com"}', driver_id)::jsonb,
+      'email',
+      driver_id::text,
+      now(),
+      now(),
+      now()
+    );
+  end if;
+end $$;
+
+-- Profiles: backfill if trigger missed; keep roles aligned to test emails.
+insert into public.app_user_profiles (user_id, role, is_authority_confirmed)
+select u.id,
+  case u.email
+    when 'distresscode04@gmail.com' then 'driver'
+    else 'citizen'
+  end,
+  true
+from auth.users u
+where u.email in ('chiefestrabon04@gmail.com', 'distresscode04@gmail.com')
+  and not exists (select 1 from public.app_user_profiles p where p.user_id = u.id);
+
+update public.app_user_profiles p
+set role = case u.email
+    when 'distresscode04@gmail.com' then 'driver'
+    else 'citizen'
+  end,
+  updated_at = now()
+from auth.users u
+where p.user_id = u.id
+  and u.email in ('chiefestrabon04@gmail.com', 'distresscode04@gmail.com');

@@ -1,0 +1,23 @@
+TrashMap PH — test accounts (dev/QA only)
+
+Do not use these credentials in production. Rotate or remove before go-live.
+
+---
+ADMIN (LGU web dashboard — AdminLoginGate, NOT Supabase email auth)
+  Username: admin123
+  Password: admin123
+
+CITIZEN (Flutter — Supabase Auth)
+  Email:    chiefestrabon04@gmail.com
+  Password: 123456
+
+DRIVER (Flutter — Supabase Auth)
+  Email:    distresscode04@gmail.com
+  Password: 123456
+---
+
+Seeding: end of supabase/schema.sql inserts citizen + driver into auth.users and auth.identities, syncs app_user_profiles. Re-run full schema in Supabase SQL Editor if users missing.
+
+If email already exists in Auth, seed skips that insert — delete user in Supabase Authentication or use existing password.
+
+More context: TEAM_HANDOFF_CONTEXT.md, HOW TOs.md (HOW TO 18 RLS).

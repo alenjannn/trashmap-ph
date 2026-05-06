@@ -1,11 +1,13 @@
 # Day 3 Phase 3 Rehearsal Runbook
 
+> **Up-to-date setup / RLS / env:** `docs/HOW TOs.md`, `docs/TEAM_HANDOFF_CONTEXT.md`. Dashboard fleet view: log in as **admin**.
+
 ## Purpose
 Repeatable Day 3 demo flow with stable data:
 - optimize routes
 - show route polylines
 - show driver confirmations
-- show realtime fleet progress + fuel savings
+- show realtime fleet progress (fuel savings UI later removed from dashboard)
 
 ## Pre-Run Checklist
 - Web app running (`npm run dev`).
@@ -35,10 +37,10 @@ Expected result:
 
 ## Step 2: LGU Dashboard Validation
 1. Open dashboard map.
-2. Confirm:
+2. Confirm (logged in as admin):
    - route polylines visible
    - fleet panel shows non-zero progress on at least one truck
-   - fuel savings panel shows values
+   - `app_config` may still hold fuel settings for optimizer; fuel **panel** was removed from dashboard UI
 3. Click `Optimize Now`.
 4. Confirm route refresh and success status message.
 
@@ -56,7 +58,6 @@ After driver confirms stop:
 2. Confirm:
    - truck progress percent increases
    - status changes (`en_route`/`collecting`/`idle`) reflect latest state
-   - fuel savings panel remains populated
 
 ## Step 5: Scheduled Trigger Validation (Optional)
 Use schedule endpoint manually to simulate cron:

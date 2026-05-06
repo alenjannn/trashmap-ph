@@ -21,6 +21,11 @@ TrashMap PH is split into 3 connected parts:
    - Stack: Supabase (Postgres + PostGIS + Realtime + Auth)
    - Schema path: `supabase/schema.sql`
    - Role: auth, storage of reports/profiles/hotspots, realtime updates
+   - **RLS (high level):** `anon` + `authenticated` JWT see only what policies allow. **Service role** (web server, `SUPABASE_SERVICE_ROLE_KEY`) bypasses RLS—use for optimizers, demo seeds, and `ROUTE_OPS_SECRET` route APIs.
+   - Fleet tables (`routes`, `route_stops`, `route_progress`, `trucks`): **admin** sees all; **driver** sees/updates rows tied to an **active** `route_assignments` row for that user.
+   - `reports`, `schedules`, `recyclers`: read (+ report insert) for `anon`/`authenticated` for public/citizen flows.
+   - `collection_points`: public read active pins; authenticated insert/update; **delete** only **admin** profile.
+   - `app_user_profiles`: full driver roster (`role = 'driver'`) visible only to **admin** (assignment dropdown); everyone still reads own row via `profiles_select_own`.
 
 ## Current Architecture and Data Flow
 1. Mobile user signs in/up via Supabase Auth.
@@ -71,13 +76,13 @@ TrashMap PH is split into 3 connected parts:
   - `gamification_points`
   - `report_verifications`
 - Added collection-point-first route planning in optimizer.
-- Updated web map legend + semantics:
-  - orange = `Reported Garbage Point`
-  - teal = `Collection Point`
-  - red = `Hotspot`
-  - blue = `Missed Pickup`
-  - green = `Routes`
-  - amber = `Risk Zone`
+- Updated web map legend + semantics (pin colors in `src/components/map/lgu-map.tsx`):
+  - orange = reported garbage
+  - teal = collection point (distinct from route lines)
+  - red = hotspot
+  - blue = missed pickup
+  - amber = risk zone
+  - route polylines = per-route colors from dashboard (not a single “green routes” swatch)
 - Removed Fuel Savings panel from active dashboard UI.
 - Added dashboard panels:
   - `Risk Zones`
@@ -98,7 +103,9 @@ TrashMap PH is split into 3 connected parts:
 - **Not fully finished yet:** dedicated Flutter missed-pickup submission flow (DB supports type already).
 
 ## Quick Repo Map
+- `docs/TEST_ACCOUNTS.md`: demo **admin / citizen / driver** credentials (dev only; mirrored in `TEST_ACCOUNTS.txt`)
 - `supabase/schema.sql`: tables, RLS, hotspot SQL functions/triggers
+- `src/lib/route-ops.ts`: template `zone_id` resolution (explicit id → CP zones → any zone → default zone row), shared route/admin DB helpers
 - `src/components/layout/dashboard-shell.tsx`: dashboard data orchestration + realtime subscriptions
 - `src/components/map/lgu-map.tsx`: hotspot/report map rendering behavior
 - `client_app/lib/services/supabase_service.dart`: Supabase init via `--dart-define`
@@ -122,7 +129,9 @@ npm install
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_legacy_jwt
 ORS_API_KEY=your_openrouteservice_api_key
+# Day 3/4: OPTIMIZER_CRON_SECRET, DEMO_SEED_SECRET, ROUTE_OPS_SECRET — see HOW TOs.md
 ```
 
 ### 4) Run web dashboard
@@ -307,17 +316,18 @@ Then open PR to `main` and request main developer review.
 - Prefer existing architecture and naming patterns.
 - Do not re-introduce mock/static map data.
 - Keep Supabase integration realtime-first.
-- Respect role-based access behavior (`admin`, `citizen`, `driver`).
+- Respect role-based access behavior (`admin`, `citizen`, `driver`) **and** table RLS in `schema.sql` (fleet data is not world-readable via anon key).
 - Do not alter hotspot SQL thresholds/logic without explicit team decision.
 - Treat this file as source of truth for onboarding and workflow policy.
 
 ## Agentic IDE Fast Context (For New Teammate)
 - Start by reading this file, then `supabase/schema.sql`, then `src/components/layout/dashboard-shell.tsx`.
 - When debugging route flow, inspect in order:
-  1. `src/lib/route-optimizer.ts`
-  2. `src/app/api/optimize-routes/route.ts`
-  3. `src/app/api/optimize-routes/scheduled/route.ts`
-  4. `client_app/lib/screens/driver_shell.dart`
+  1. `src/lib/route-ops.ts` (zone resolution, progress helpers)
+  2. `src/lib/route-optimizer.ts`
+  3. `src/app/api/optimize-routes/route.ts`
+  4. `src/app/api/optimize-routes/scheduled/route.ts`
+  5. `client_app/lib/screens/driver_shell.dart`
 - Always verify env:
   - Web `.env.local`: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ORS_API_KEY`, `OPTIMIZER_CRON_SECRET`, `DEMO_SEED_SECRET`
   - Flutter run defines: `SUPABASE_URL`, `SUPABASE_ANON_KEY`
@@ -328,6 +338,12 @@ Then open PR to `main` and request main developer review.
 1. Add dedicated Flutter missed-pickup report submission screen/flow.
 2. Harden Supabase Storage policy checklist for `report-photos` verification uploads.
 3. Continue map UX polish while preserving hotspot and risk-zone readability.
+
+## RLS troubleshooting (symptoms)
+- **Dashboard shows no routes / empty fleet** while logged in as **citizen** or **driver**: expected—open dashboard as **admin** (`app_user_profiles.role = 'admin'`) for fleet + today’s routes.
+- **Driver sees no route**: check active `route_assignments` for that `auth.uid()`; RLS hides routes without assignment.
+- **PostgREST permission / policy errors** after git pull: re-run full `supabase/schema.sql` on your Supabase project.
+- **Driver roster empty in admin UI**: only admins may list other users’ driver profiles; confirm logged-in user has admin profile row.
 
 ## Day 4 Handoff Addendum (Latest)
 ### Scope Completed
@@ -341,8 +357,9 @@ Then open PR to `main` and request main developer review.
 
 ### Day 4 Runtime Requirements
 - `ROUTE_OPS_SECRET` must exist in web `.env.local`.
-- Dashboard route operations must send matching ops token to protected APIs.
-- Database schema changes in `supabase/schema.sql` must be applied (includes route assignment and notification dedupe constraints).
+- Dashboard route operations must send matching ops token to protected HTTP APIs (Bearer header).
+- Protected server routes include materialize/delete flows (e.g. `DELETE` handlers under `src/app/api/routes/`, `src/app/api/collection-points/`, `src/app/api/routes/templates/`)—all use service client + ops auth, not RLS-patched anon key.
+- Database: re-apply `supabase/schema.sql` when pulling main (RLS policies, indexes, notification dedupe constraints, `zones`/`collection_points` helpers).
 
 ### Day 4 Validation Checklist
 1. Create weekly route from dashboard map and confirm template is saved.

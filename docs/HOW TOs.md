@@ -45,7 +45,7 @@ PowerShell:
 Run twice. Use outputs as secrets.
 
 ## HOW TO 5: Configure Web `.env.local`
-Create root file `.env.local`:
+Create root file `.env.local` (Day 4 also needs `ROUTE_OPS_SECRET`—see HOW TO 13):
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
@@ -54,6 +54,8 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_legacy_jwt
 ORS_API_KEY=your_openrouteservice_api_key
 OPTIMIZER_CRON_SECRET=your_random_secret
 DEMO_SEED_SECRET=your_random_secret
+# Day 4 admin route HTTP ops:
+# ROUTE_OPS_SECRET=your_strong_route_ops_secret
 ```
 
 Restart dev server after changes:
@@ -101,6 +103,7 @@ Specific emulator target example (`emulator-5554`) with explicit Flutter path:
 Tip:
 - Start emulator first in Android Studio Device Manager before `flutter run`.
 - Recheck connected devices anytime with `flutter devices`.
+- Demo **citizen / driver / admin** logins: `docs/TEST_ACCOUNTS.md` (also `docs/TEST_ACCOUNTS.txt`).
 
 ## HOW TO 9: Apply Database Schema
 1. Open Supabase **SQL Editor**.
@@ -112,6 +115,8 @@ Tip:
    - `routes`
    - `route_stops`
    - `route_progress`
+   - `zones`, `collection_points`, `route_templates`, `route_assignments`, … (see `schema.sql` head comments)
+5. After pulling new code, **re-run the full script** (or your migration pipeline) so **RLS policies** stay in sync—otherwise the web/driver apps may get empty data or policy errors (see HOW TO 18).
 
 ## HOW TO 10: Test Full Day 3 Flow
 1. Start web:
@@ -122,11 +127,11 @@ Tip:
    ```bash
    curl -X POST http://localhost:3000/api/demo/day3-seed -H "Authorization: Bearer your_demo_seed_secret"
    ```
-3. Open LGU dashboard and confirm:
+3. Open LGU dashboard **as admin** and confirm:
    - report pins visible
    - hotspot circle visible
    - route polylines visible
-   - fleet + fuel savings panels updating
+   - fleet / route progress reflects live data (Fuel Savings panel removed from UI)
 4. Open Flutter driver mode and confirm pickup.
 5. Check LGU dashboard updates in near real time.
 
@@ -210,3 +215,13 @@ Check tables:
 - Error: `Unauthorized route ops request`
   - Cause: wrong/missing ops token.
   - Fix: set `ROUTE_OPS_SECRET` in `.env.local`, restart server, input exact same token in admin modal.
+
+## HOW TO 18: Row Level Security (empty data / permission errors)
+Symptoms: dashboard shows **no routes** or **no trucks**; Supabase client errors mentioning **policy** / **permission**; driver cannot update stops despite assignment.
+
+Checks:
+1. **Re-apply** `supabase/schema.sql` on the Supabase project you are pointing at (team members often use different projects).
+2. **Dashboard:** log in with a user whose `app_user_profiles.role` is **`admin`**. Citizens/drivers do **not** receive fleet-wide `routes` / `trucks` rows under current RLS.
+3. **Driver app:** ensure `route_assignments` has an **active** row (`is_active = true`) linking `driver_id` to the route; without it, `routes` / `route_stops` / `trucks` are hidden.
+4. **Citizen / anon:** `reports`, `schedules`, `recyclers` remain readable for map and tabs; fleet tables are not.
+5. **Server-only work** (optimizer, demo seeds, HTTP DELETE/materialize with `ROUTE_OPS_SECRET`) uses **service role** and bypasses RLS—if those fail, check `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`, not RLS.

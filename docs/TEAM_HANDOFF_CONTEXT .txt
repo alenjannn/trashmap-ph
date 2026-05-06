@@ -1,5 +1,7 @@
  TrashMap PH Team Handoff Context
 
+ Note: Canonical, maintained copy is TEAM_HANDOFF_CONTEXT.md (this .txt is a plain-text mirror; use .md for setup commands and links).
+
  Purpose
 This file gives full project context for teammates and their AI assistants.
 Main goal: continue development safely without direct changes to `main`.
@@ -21,6 +23,11 @@ TrashMap PH is split into 3 connected parts:
    - Stack: Supabase (Postgres + PostGIS + Realtime + Auth)
    - Schema path: `supabase/schema.sql`
    - Role: auth, storage of reports/profiles/hotspots, realtime updates
+   - RLS: anon/authenticated JWT limited by policies; service role (SUPABASE_SERVICE_ROLE_KEY on server) bypasses RLS.
+   - Fleet (routes, route_stops, route_progress, trucks): admin sees all; driver only rows tied to active route_assignments for that user.
+   - reports, schedules, recyclers: public read (+ report insert) for citizen flows.
+   - collection_points: delete only admin profile; see schema for insert/update/select.
+   - Driver roster (other users): listable only by admin for assignment UI.
 
  Current Architecture and Data Flow
 1. Mobile user signs in/up via Supabase Auth.
@@ -43,7 +50,9 @@ TrashMap PH is split into 3 connected parts:
 - Not fully finished yet: dedicated Flutter missed-pickup submission flow (DB supports type already).
 
  Quick Repo Map
+- docs/TEST_ACCOUNTS.md / TEST_ACCOUNTS.txt — demo admin, citizen, driver (dev only)
 - `supabase/schema.sql`: tables, RLS, hotspot SQL functions/triggers
+- `src/lib/route-ops.ts`: template zone resolution, shared route DB helpers
 - `src/components/layout/dashboard-shell.tsx`: dashboard data orchestration + realtime subscriptions
 - `src/components/map/lgu-map.tsx`: hotspot/report map rendering behavior
 - `client_app/lib/services/supabase_service.dart`: Supabase init via `--dart-define`
@@ -67,7 +76,9 @@ npm install
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_legacy_jwt
 ORS_API_KEY=your_openrouteservice_api_key
+# Day 3/4: OPTIMIZER_CRON_SECRET, DEMO_SEED_SECRET, ROUTE_OPS_SECRET — see HOW TOs.md
 ```
 
  4) Run web dashboard
@@ -252,14 +263,19 @@ Then open PR to `main` and request main developer review.
 - Prefer existing architecture and naming patterns.
 - Do not re-introduce mock/static map data.
 - Keep Supabase integration realtime-first.
-- Respect role-based access behavior (`admin`, `citizen`, `driver`).
+- Respect role-based access (`admin`, `citizen`, `driver`) and table RLS in schema.sql.
 - Do not alter hotspot SQL thresholds/logic without explicit team decision.
-- Treat this file as source of truth for onboarding and workflow policy.
+- Treat TEAM_HANDOFF_CONTEXT.md as source of truth for onboarding and workflow policy.
+
+ RLS troubleshooting (short)
+- Dashboard fleet/routes empty: log in as admin, not citizen/driver.
+- Driver no route: check active route_assignments.
+- Policy errors after git pull: re-run full supabase/schema.sql on your Supabase project.
 
  Known Next Priorities
-1. Finish photo upload to Supabase Storage from Flutter report flow.
-2. Add dedicated Flutter missed-pickup report submission screen/flow.
-3. Continue map UX polish while preserving current hotspot visibility behavior.
+1. Add dedicated Flutter missed-pickup report submission screen/flow.
+2. Harden Supabase Storage policy checklist for report-photos verification uploads.
+3. Continue map UX polish while preserving hotspot and risk-zone readability.
 
 Day 4 Handoff Addendum (Latest)
 Scope Completed
@@ -273,8 +289,8 @@ Scope Completed
 
 Day 4 Runtime Requirements
 - ROUTE_OPS_SECRET must exist in web .env.local.
-- Dashboard route operations must send matching ops token to protected APIs.
-- Database schema changes in supabase/schema.sql must be applied (includes route assignment and notification dedupe constraints).
+- Dashboard route operations must send matching ops token (Bearer) to protected HTTP APIs; those handlers use service client + ops check.
+- Re-apply supabase/schema.sql when updating (RLS, indexes, notification dedupe, zones/collection_points).
 
 Day 4 Validation Checklist
 1. Create weekly route from dashboard map and confirm template is saved.

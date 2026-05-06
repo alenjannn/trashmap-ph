@@ -1,5 +1,7 @@
 # Day 2 Handoff Notes
 
+> **Current project state:** see `docs/TEAM_HANDOFF_CONTEXT.md` and `docs/HOW TOs.md` (RLS, Day 3–4 routes, env vars). This file is historical Day 2 scope.
+
 ## Priority Integration Path
 1. Wire Flutter Report form submit -> Supabase `reports` insert.
 2. Wire Next.js dashboard read -> live `reports` fetch.
