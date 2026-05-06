@@ -1,0 +1,169 @@
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+export type ActorRole = "admin" | "driver" | "system";
+export type AssignMode = "manual" | "auto";
+
+type RouteRow = {
+  id: string;
+  zone_id: string | null;
+  status: string;
+  route_date: string;
+  truck_id: string;
+};
+
+export function isRouteOpsAuthorized(request: Request): boolean {
+  const token =
+    process.env.ROUTE_OPS_SECRET ?? process.env.OPTIMIZER_CRON_SECRET ?? process.env.DEMO_SEED_SECRET ?? "";
+  if (!token) return false;
+  const authHeader = request.headers.get("authorization") ?? "";
+  return authHeader === `Bearer ${token}`;
+}
+
+export function getServiceSupabase(): SupabaseClient {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+  }
+  return createClient(supabaseUrl, serviceRoleKey);
+}
+
+export async function getRouteOrThrow(supabase: SupabaseClient, routeId: string): Promise<RouteRow> {
+  const { data, error } = await supabase
+    .from("routes")
+    .select("id, zone_id, status, route_date, truck_id")
+    .eq("id", routeId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`Failed to load route: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error("Route not found.");
+  }
+  return data as RouteRow;
+}
+
+export async function appendRouteAudit(
+  supabase: SupabaseClient,
+  payload: {
+    routeId: string;
+    stopId?: string | null;
+    zoneId?: string | null;
+    eventType: "route_started" | "truck_arriving" | "stop_completed" | "route_completed" | "exception";
+    actorUserId?: string | null;
+    actorRole: ActorRole;
+    areaLabel?: string;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const { error } = await supabase.from("route_audit_logs").insert({
+    route_id: payload.routeId,
+    stop_id: payload.stopId ?? null,
+    zone_id: payload.zoneId ?? null,
+    event_type: payload.eventType,
+    actor_user_id: payload.actorUserId ?? null,
+    actor_role: payload.actorRole,
+    area_label: payload.areaLabel ?? null,
+    metadata_json: payload.metadata ?? {},
+  });
+  if (error) {
+    throw new Error(`Failed to write route audit log: ${error.message}`);
+  }
+}
+
+export async function appendRouteNotification(
+  supabase: SupabaseClient,
+  payload: {
+    routeId: string;
+    zoneId?: string | null;
+    eventType: "route_started" | "truck_arriving" | "route_completed" | "exception";
+    title: string;
+    body: string;
+    targetScope: "admin" | "citizen_zone" | "both";
+    metadata?: Record<string, unknown>;
+    ignoreDuplicate?: boolean;
+  },
+): Promise<void> {
+  const { error } = await supabase.from("route_notifications_log").insert({
+    route_id: payload.routeId,
+    zone_id: payload.zoneId ?? null,
+    event_type: payload.eventType,
+    target_scope: payload.targetScope,
+    title: payload.title,
+    body: payload.body,
+    metadata_json: payload.metadata ?? {},
+  });
+  if (error) {
+    if (payload.ignoreDuplicate && error.code === "23505") {
+      return;
+    }
+    throw new Error(`Failed to write route notification log: ${error.message}`);
+  }
+}
+
+export async function pickAutoDriverId(supabase: SupabaseClient): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("app_user_profiles")
+    .select("user_id")
+    .eq("role", "driver")
+    .limit(1);
+  if (error) {
+    throw new Error(`Failed to select auto driver: ${error.message}`);
+  }
+  if (!data || data.length === 0) return null;
+  return data[0].user_id as string;
+}
+
+export async function upsertRouteProgress(
+  supabase: SupabaseClient,
+  payload: {
+    routeId: string;
+    stopId: string;
+    status: "completed" | "skipped";
+    driverId?: string | null;
+    notes?: string | null;
+  },
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const { data: existingRow, error: readError } = await supabase
+    .from("route_progress")
+    .select("id")
+    .eq("route_id", payload.routeId)
+    .eq("stop_id", payload.stopId)
+    .limit(1)
+    .maybeSingle();
+  if (readError) {
+    throw new Error(`Failed to read route progress row: ${readError.message}`);
+  }
+
+  if (existingRow?.id) {
+    const { error: updateError } = await supabase
+      .from("route_progress")
+      .update({
+        status: payload.status,
+        confirmed_at: nowIso,
+        notes: payload.notes ?? null,
+        driver_id: payload.driverId ?? null,
+        updated_at: nowIso,
+      })
+      .eq("id", existingRow.id as string);
+    if (updateError) {
+      throw new Error(`Failed to update route progress row: ${updateError.message}`);
+    }
+    return;
+  }
+
+  const { error: insertError } = await supabase.from("route_progress").insert({
+    route_id: payload.routeId,
+    stop_id: payload.stopId,
+    truck_id: (await getRouteOrThrow(supabase, payload.routeId)).truck_id,
+    status: payload.status,
+    confirmed_at: nowIso,
+    notes: payload.notes ?? null,
+    driver_id: payload.driverId ?? null,
+    updated_at: nowIso,
+  });
+  if (insertError) {
+    throw new Error(`Failed to insert route progress row: ${insertError.message}`);
+  }
+}

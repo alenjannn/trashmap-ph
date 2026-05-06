@@ -2,7 +2,7 @@ export type DashboardPin = {
   id: string;
   lat: number;
   lng: number;
-  type: "dumpsite" | "missed_pickup" | "hotspot";
+  type: "reported_garbage_point" | "missed_pickup" | "hotspot" | "collection_point" | "risk_zone";
   label: string;
   wasteType?: "biodegradable" | "recyclable" | "special_hazardous" | "mixed" | "unknown";
   radiusMeters?: number;
@@ -26,9 +26,22 @@ export type FleetTruck = {
 
 export type IncidentItem = {
   id: string;
-  type: "dumpsite" | "missed_pickup" | "hotspot";
+  type: "reported_garbage_point" | "missed_pickup" | "hotspot";
   title: string;
   locationLabel: string;
   createdAgo: string;
   severity: "low" | "medium" | "high";
+};
+
+export type RiskZoneItem = {
+  id: string;
+  name: string;
+  score: number;
+  level: "low" | "medium" | "high" | "critical";
+};
+
+export type BarangayLeaderboardItem = {
+  id: string;
+  name: string;
+  reportCount: number;
 };

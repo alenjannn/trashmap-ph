@@ -123,7 +123,7 @@ class _ReportScreenState extends State<ReportScreen> {
           const Padding(
             padding: EdgeInsets.fromLTRB(4, 6, 4, 12),
             child: Text(
-              'Report Dumpsite',
+              'Report Garbage Point',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
             ),
           ),

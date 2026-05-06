@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { getORSRoadGeometry } from "@/lib/ors-directions";
 
 type TruckSeed = {
   truck_code: string;
@@ -19,6 +20,18 @@ type StopSeed = {
 type TruckRow = {
   id: string;
   truck_code: string;
+};
+
+type CollectionPointRow = {
+  label: string;
+  lat: number;
+  lng: number;
+};
+
+type HotspotRow = {
+  center_lat: number;
+  center_lng: number;
+  severity: "low" | "medium" | "high" | "critical";
 };
 
 type InsertedRouteRow = {
@@ -50,11 +63,14 @@ type OptimizeResult = {
 };
 
 const DEFAULT_STOPS: StopSeed[] = [
-  { label: "Tandang Sora - Bayanihan", lat: 14.676008, lng: 121.042846, stopType: "pickup", weight: 3 },
-  { label: "Mindanao Ave - Northbound", lat: 14.673911, lng: 121.041238, stopType: "pickup", weight: 2 },
-  { label: "Visayas Ave - Barangay Hall", lat: 14.680211, lng: 121.040912, stopType: "pickup", weight: 2 },
-  { label: "Congressional Ave - Service Rd", lat: 14.671932, lng: 121.037885, stopType: "pickup", weight: 1 },
-  { label: "Waste Transfer Station", lat: 14.668842, lng: 121.047109, stopType: "transfer", weight: 1 },
+  { label: "Brentwood Gate North", lat: 14.69032, lng: 121.10623, stopType: "pickup", weight: 3 },
+  { label: "Brentwood Inner Loop A", lat: 14.68991, lng: 121.10687, stopType: "pickup", weight: 2 },
+  { label: "Brentwood Inner Loop B", lat: 14.68952, lng: 121.10748, stopType: "pickup", weight: 2 },
+  { label: "Brentwood East Row", lat: 14.68905, lng: 121.10793, stopType: "pickup", weight: 2 },
+  { label: "Brentwood Mid Court", lat: 14.68876, lng: 121.10719, stopType: "pickup", weight: 2 },
+  { label: "Brentwood South Pocket", lat: 14.68834, lng: 121.10682, stopType: "pickup", weight: 2 },
+  { label: "Brentwood Lower West", lat: 14.68805, lng: 121.10608, stopType: "pickup", weight: 2 },
+  { label: "Brentwood Exit South", lat: 14.68772, lng: 121.10559, stopType: "pickup", weight: 1 },
 ];
 
 const TRUCKS: TruckSeed[] = [
@@ -162,6 +178,12 @@ function getSupabaseServerClient() {
   return createClient(supabaseUrl, serviceRoleKey);
 }
 
+function pickTruckCount(stopCount: number, maxTrucks: number): number {
+  if (stopCount <= 10) return Math.min(1, maxTrucks);
+  if (stopCount <= 22) return Math.min(2, maxTrucks);
+  return Math.min(3, maxTrucks);
+}
+
 export async function runRouteOptimization(options?: RunOptions): Promise<OptimizeResult> {
   const supabase = getSupabaseServerClient();
   const routeDate = isoDateToday();
@@ -177,6 +199,22 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
   }
 
   const typedTrucks = truckRows as TruckRow[];
+  const { data: collectionPointRows } = await supabase
+    .from("collection_points")
+    .select("label, lat, lng")
+    .eq("is_active", true)
+    .order("created_at", { ascending: true })
+    .limit(60);
+
+  const collectionPointStops: StopSeed[] =
+    (collectionPointRows as CollectionPointRow[] | null)?.map((row) => ({
+      label: row.label,
+      lat: row.lat,
+      lng: row.lng,
+      stopType: "pickup" as const,
+      weight: 3,
+    })) ?? [];
+
   const { data: hotspotRows } = await supabase
     .from("hotspots")
     .select("center_lat, center_lng, severity")
@@ -185,7 +223,7 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
     .limit(12);
 
   const hotspotStops: StopSeed[] =
-    hotspotRows?.map((row, index) => ({
+    (hotspotRows as HotspotRow[] | null)?.map((row, index) => ({
       label: `Hotspot ${index + 1}`,
       lat: row.center_lat,
       lng: row.center_lng,
@@ -193,8 +231,16 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
       weight: row.severity === "critical" ? 4 : row.severity === "high" ? 3 : 2,
     })) ?? [];
 
-  const stopPool = hotspotStops.length > 0 ? hotspotStops : DEFAULT_STOPS;
-  const stopBuckets = splitStopsIntoBuckets(stopPool, typedTrucks.length);
+  const stopPool =
+    collectionPointStops.length > 0
+      ? [...collectionPointStops, ...hotspotStops.slice(0, Math.max(0, 24 - collectionPointStops.length))]
+      : hotspotStops.length > 0
+        ? hotspotStops
+        : DEFAULT_STOPS;
+
+  const activeTruckCount = pickTruckCount(stopPool.length, typedTrucks.length);
+  const activeTrucks = typedTrucks.slice(0, activeTruckCount);
+  const stopBuckets = splitStopsIntoBuckets(stopPool, activeTrucks.length);
 
   const { data: existingRoutes, error: existingRoutesError } = await supabase
     .from("routes")
@@ -217,26 +263,24 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
   let warning: string | undefined;
 
   const routeInsertPayload = await Promise.all(
-    typedTrucks.map(async (truck, index) => {
+    activeTrucks.map(async (truck, index) => {
       const assignedStops = stopBuckets[index] ?? [];
       const fallbackDistance = estimateDistanceKm(assignedStops);
       const fallbackDuration = Math.max(25, assignedStops.length * 18);
+
+      let polylineStr = makePolyline(assignedStops);
       let estimatedDistanceKm = fallbackDistance;
       let estimatedDurationMinutes = fallbackDuration;
 
-      if (preferORS && orsKey) {
-        try {
-          const orsEstimate = await estimateWithORS(orsKey, assignedStops);
-          estimatedDistanceKm = orsEstimate.distanceKm;
-          estimatedDurationMinutes = orsEstimate.durationMin;
-        } catch (error) {
+      if (preferORS && orsKey && assignedStops.length >= 2) {
+        const geometry = await getORSRoadGeometry(orsKey, assignedStops);
+        if (geometry.mode === "ors") {
+          polylineStr = geometry.polyline;
+          estimatedDistanceKm = geometry.distanceKm;
+          estimatedDurationMinutes = geometry.durationMin;
+        } else {
           mode = "mock";
-          warning =
-            error instanceof Error
-              ? `ORS unavailable, switched to mock fallback: ${error.message}`
-              : "ORS unavailable, switched to mock fallback.";
-          estimatedDistanceKm = fallbackDistance;
-          estimatedDurationMinutes = fallbackDuration;
+          warning = "ORS unavailable, switched to mock fallback.";
         }
       }
 
@@ -249,7 +293,7 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
         estimated_distance_km: estimatedDistanceKm,
         estimated_duration_minutes: estimatedDurationMinutes,
         estimated_fuel_liters: estimatedFuelLiters,
-        polyline: makePolyline(assignedStops),
+        polyline: polylineStr,
       };
     }),
   );
