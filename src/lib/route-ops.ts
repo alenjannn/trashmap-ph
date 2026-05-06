@@ -28,6 +28,61 @@ export function getServiceSupabase(): SupabaseClient {
   return createClient(supabaseUrl, serviceRoleKey);
 }
 
+/**
+ * Resolves zone_id for a new route template: explicit id → collection points → any zone row → create default.
+ */
+export async function resolveTemplateZoneId(
+  supabase: SupabaseClient,
+  opts: { explicitZoneId?: string | null; collectionPointIds: string[] },
+): Promise<string> {
+  const cpIds = opts.collectionPointIds.filter(Boolean);
+  const cpZoneIds: string[] = [];
+  if (cpIds.length > 0) {
+    const { data: cps } = await supabase.from("collection_points").select("zone_id").in("id", cpIds);
+    const set = new Set<string>();
+    for (const row of cps ?? []) {
+      const z = row.zone_id as string | null;
+      if (z) set.add(z);
+    }
+    cpZoneIds.push(...set);
+  }
+
+  const explicit = opts.explicitZoneId?.trim();
+  if (explicit) {
+    const { data } = await supabase.from("zones").select("id").eq("id", explicit).maybeSingle();
+    if (data?.id) return data.id as string;
+  }
+
+  if (cpZoneIds.length === 1) return cpZoneIds[0];
+  if (cpZoneIds.length > 1) {
+    throw new Error(
+      "Selected stops span multiple zones. Pick one zone in the dropdown, or use stops that share the same zone.",
+    );
+  }
+
+  const { data: first } = await supabase
+    .from("zones")
+    .select("id")
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (first?.id) return first.id as string;
+
+  const { data: inserted, error } = await supabase
+    .from("zones")
+    .insert({ name: "Default service area", lat: 14.676, lng: 121.0437 })
+    .select("id")
+    .single();
+  if (!error && inserted?.id) return inserted.id as string;
+
+  const { data: byName } = await supabase.from("zones").select("id").eq("name", "Default service area").maybeSingle();
+  if (byName?.id) return byName.id as string;
+
+  throw new Error(
+    error?.message ?? "No zones in database. Run schema seed or allow server to create default zone.",
+  );
+}
+
 export async function getRouteOrThrow(supabase: SupabaseClient, routeId: string): Promise<RouteRow> {
   const { data, error } = await supabase
     .from("routes")

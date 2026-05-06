@@ -46,6 +46,8 @@ type TruckRow = {
 type RouteRow = {
   id: string;
   truck_id: string;
+  route_date: string;
+  status: string;
   estimated_distance_km: number | null;
   estimated_fuel_liters: number | null;
   polyline: string | null;
@@ -73,6 +75,14 @@ type CollectionPointRow = {
   label: string;
   lat: number;
   lng: number;
+  is_active: boolean;
+  zone_id: string | null;
+};
+
+type RouteTemplateRow = {
+  id: string;
+  name: string;
+  recurrence_day: string;
   is_active: boolean;
 };
 
@@ -153,6 +163,7 @@ export function DashboardShell() {
   const [riskZones, setRiskZones] = useState<RiskZoneItem[]>([]);
   const [barangayLeaderboard, setBarangayLeaderboard] = useState<BarangayLeaderboardItem[]>([]);
   const [collectionPoints, setCollectionPoints] = useState<CollectionPointRow[]>([]);
+  const [routeTemplates, setRouteTemplates] = useState<RouteTemplateRow[]>([]);
   const [activeRouteRows, setActiveRouteRows] = useState<RouteRow[]>([]);
   const [routeAuditRows, setRouteAuditRows] = useState<RouteAuditRow[]>([]);
   const [routeNotificationRows, setRouteNotificationRows] = useState<RouteNotificationRow[]>([]);
@@ -182,6 +193,7 @@ export function DashboardShell() {
   const [pinError, setPinError] = useState<string | null>(null);
   const [zones, setZones] = useState<ZoneRow[]>([]);
   const [activeLogTab, setActiveLogTab] = useState<"all" | "audit" | "notifications" | "pickups">("all");
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
 
   const supabase = getBrowserSupabaseClient();
   const pins = useMemo(
@@ -336,7 +348,7 @@ export function DashboardShell() {
     async function loadCollectionPoints() {
       const { data, error } = await client
         .from("collection_points")
-        .select("id, label, lat, lng, is_active")
+        .select("id, label, lat, lng, is_active, zone_id")
         .eq("is_active", true)
         .order("created_at", { ascending: false })
         .limit(300);
@@ -378,7 +390,7 @@ export function DashboardShell() {
 
       const { data, error } = await client
         .from("routes")
-        .select("id, truck_id, estimated_distance_km, estimated_fuel_liters, polyline")
+        .select("id, truck_id, route_date, status, estimated_distance_km, estimated_fuel_liters, polyline")
         .eq("route_date", routeDate)
         .in("status", ["published", "scheduled", "in_progress", "completed", "completed_with_issues"])
         .order("created_at", { ascending: false })
@@ -529,6 +541,16 @@ export function DashboardShell() {
       setZones((data ?? []) as ZoneRow[]);
     }
 
+    async function loadRouteTemplates() {
+      const { data } = await client
+        .from("route_templates")
+        .select("id, name, recurrence_day, is_active")
+        .eq("is_active", true)
+        .order("created_at", { ascending: false })
+        .limit(40);
+      setRouteTemplates((data ?? []) as RouteTemplateRow[]);
+    }
+
     void loadReports();
     void loadHotspots();
     void loadFleet();
@@ -537,6 +559,7 @@ export function DashboardShell() {
     void loadRoutesAndProgress();
     void loadDrivers();
     void loadZones();
+    void loadRouteTemplates();
 
     const reportsChannel = client
       .channel("dashboard-reports-live-v2")
@@ -615,6 +638,17 @@ export function DashboardShell() {
       )
       .subscribe();
 
+    const routeTemplatesChannel = client
+      .channel("dashboard-route-templates-live-v1")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "route_templates" },
+        () => {
+          void loadRouteTemplates();
+        },
+      )
+      .subscribe();
+
     const riskZonesChannel = client
       .channel("dashboard-risk-zones-live-v1")
       .on(
@@ -634,9 +668,28 @@ export function DashboardShell() {
       void client.removeChannel(routeProgressChannel);
       void client.removeChannel(routeStopsChannel);
       void client.removeChannel(collectionPointsChannel);
+      void client.removeChannel(routeTemplatesChannel);
       void client.removeChannel(riskZonesChannel);
     };
-  }, [supabase, selectedRouteId]);
+  }, [supabase, selectedRouteId, dashboardRefreshKey]);
+
+  async function callOpsDelete(path: string): Promise<boolean> {
+    setRouteOpsMessage(null);
+    if (!opsToken.trim()) {
+      setRouteOpsMessage("Route ops token required.");
+      return false;
+    }
+    const response = await fetch(path, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${opsToken.trim()}` },
+    });
+    const payload = (await response.json()) as { ok?: boolean; message?: string };
+    if (!response.ok || !payload.ok) {
+      setRouteOpsMessage(payload.message ?? "Delete failed.");
+      return false;
+    }
+    return true;
+  }
 
   async function callRouteOps(path: string, body: Record<string, unknown>) {
     setRouteOpsMessage(null);
@@ -682,19 +735,15 @@ export function DashboardShell() {
         return;
       }
 
-      // Zone resolution: explicit picker → first zone → error
-      let resolvedZoneId = templateZoneId || null;
-      if (!resolvedZoneId && zones.length > 0) {
-        resolvedZoneId = zones[0].id;
-      }
-      if (!resolvedZoneId) {
-        setRouteOpsMessage("No zone found. Run schema.sql to seed zones.");
-        return;
+      // Zone: optional in UI — API resolves from picker, stop zone_ids, first DB zone, or creates default.
+      let zoneForApi: string | undefined = templateZoneId.trim() || undefined;
+      if (!zoneForApi && zones.length > 0) {
+        zoneForApi = zones[0].id;
       }
 
       const templatePayload = await callRouteOps("/api/routes/templates", {
         name: templateName,
-        zoneId: resolvedZoneId,
+        ...(zoneForApi ? { zoneId: zoneForApi } : {}),
         recurrenceDay: templateDay,
         stops: draftRouteStops.map((stop, index) => ({ collectionPointId: stop.id, stopOrder: index + 1 })),
       });
@@ -717,8 +766,37 @@ export function DashboardShell() {
       setIsRoutePlannerMode(false);
       setDraftRouteStops([]);
       setShowRouteConfirmModal(false);
+      setDashboardRefreshKey((k) => k + 1);
     } catch (error) {
       setRouteOpsMessage(error instanceof Error ? error.message : "Template create failed.");
+    }
+  }
+
+  async function handleDeleteRoute(routeId: string) {
+    if (!window.confirm("Delete this route and related stops, progress, and assignments?")) return;
+    const ok = await callOpsDelete(`/api/routes/${routeId}`);
+    if (ok) {
+      setRouteOpsMessage("Route deleted.");
+      if (selectedRouteId === routeId) setSelectedRouteId("");
+      setDashboardRefreshKey((k) => k + 1);
+    }
+  }
+
+  async function handleDeleteTemplate(templateId: string) {
+    if (!window.confirm("Delete this weekly route template and its stop list?")) return;
+    const ok = await callOpsDelete(`/api/routes/templates/${templateId}`);
+    if (ok) {
+      setRouteOpsMessage("Weekly template deleted.");
+      setDashboardRefreshKey((k) => k + 1);
+    }
+  }
+
+  async function handleDeleteCollectionPoint(cpId: string, label: string) {
+    if (!window.confirm(`Remove collection point "${label}"? Templates referencing it will lose those stops.`)) return;
+    const ok = await callOpsDelete(`/api/collection-points/${cpId}`);
+    if (ok) {
+      setRouteOpsMessage("Collection point deleted.");
+      setDashboardRefreshKey((k) => k + 1);
     }
   }
 
@@ -1083,7 +1161,7 @@ export function DashboardShell() {
                 <option value="">Select route…</option>
                 {activeRouteRows.map((route) => (
                   <option key={route.id} value={route.id}>
-                    {route.id.slice(0, 8)}…
+                    {route.route_date} · {route.status} · {route.id.slice(0, 8)}…
                   </option>
                 ))}
               </select>
@@ -1120,6 +1198,85 @@ export function DashboardShell() {
               ) : null}
             </div>
           </section>
+
+          {/* ── Delete / manage entities ─────────────────────── */}
+          <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+            <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-800">Manage Data</h3>
+            <p className="mb-3 text-[11px] text-zinc-500">Uses route ops token above. Deletes cannot be undone.</p>
+
+            <div className="mb-4">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Today&apos;s routes</p>
+              <div className="max-h-28 space-y-1 overflow-y-auto text-xs">
+                {activeRouteRows.length === 0 ? (
+                  <p className="text-zinc-400">No routes for today.</p>
+                ) : (
+                  activeRouteRows.map((r) => (
+                    <div key={r.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1">
+                      <span className="min-w-0 truncate text-zinc-700">
+                        {r.status} · {r.id.slice(0, 8)}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => { void handleDeleteRoute(r.id); }}
+                        className="shrink-0 cursor-pointer rounded bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Weekly templates</p>
+              <div className="max-h-28 space-y-1 overflow-y-auto text-xs">
+                {routeTemplates.length === 0 ? (
+                  <p className="text-zinc-400">No templates yet.</p>
+                ) : (
+                  routeTemplates.map((t) => (
+                    <div key={t.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1">
+                      <span className="min-w-0 truncate text-zinc-700" title={t.name}>
+                        {t.name} · {t.recurrence_day}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => { void handleDeleteTemplate(t.id); }}
+                        className="shrink-0 cursor-pointer rounded bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Collection points</p>
+              <div className="max-h-36 space-y-1 overflow-y-auto text-xs">
+                {collectionPoints.length === 0 ? (
+                  <p className="text-zinc-400">No active collection points.</p>
+                ) : (
+                  collectionPoints.map((cp) => (
+                    <div key={cp.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1">
+                      <span className="min-w-0 truncate text-zinc-700" title={cp.label}>
+                        {cp.label}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => { void handleDeleteCollectionPoint(cp.id, cp.label); }}
+                        className="shrink-0 cursor-pointer rounded bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-700 hover:bg-red-100"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </section>
+
           {/* ── Ops Activity Log (merged tabbed) ──────────────── */}
           <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm">
             <div className="border-b border-zinc-100 px-4 py-3">
@@ -1244,19 +1401,24 @@ export function DashboardShell() {
                   ))}
                 </select>
               </div>
-              {zones.length > 0 ? (
-                <div>
-                  <label className="mb-1 block text-xs font-semibold text-zinc-700">Zone</label>
-                  <select
-                    value={templateZoneId}
-                    onChange={(e) => setTemplateZoneId(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                  >
-                    <option value="">Auto-select zone</option>
-                    {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-                  </select>
-                </div>
-              ) : null}
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-zinc-700">Zone (optional)</label>
+                <select
+                  value={templateZoneId}
+                  onChange={(e) => setTemplateZoneId(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                >
+                  <option value="">Auto — from stops, DB, or new default zone</option>
+                  {zones.map((z) => (
+                    <option key={z.id} value={z.id}>
+                      {z.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-zinc-500">
+                  Leave auto if stops share one zone_id, or if zones table is empty (server creates default).
+                </p>
+              </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-zinc-700">Ops Token</label>
                 <input

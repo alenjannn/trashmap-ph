@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getServiceSupabase, isRouteOpsAuthorized } from "@/lib/route-ops";
+import { getServiceSupabase, isRouteOpsAuthorized, resolveTemplateZoneId } from "@/lib/route-ops";
 
 type TemplateStopInput = {
   collectionPointId: string;
@@ -8,7 +8,7 @@ type TemplateStopInput = {
 
 type CreateTemplateBody = {
   name: string;
-  zoneId: string;
+  zoneId?: string | null;
   recurrenceDay: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
   createdBy?: string;
   stops: TemplateStopInput[];
@@ -21,8 +21,8 @@ export async function POST(request: Request) {
 
   try {
     const body = (await request.json()) as Partial<CreateTemplateBody>;
-    if (!body.name || !body.zoneId || !body.recurrenceDay) {
-      return NextResponse.json({ ok: false, message: "name, zoneId, recurrenceDay are required." }, { status: 400 });
+    if (!body.name || !body.recurrenceDay) {
+      return NextResponse.json({ ok: false, message: "name and recurrenceDay are required." }, { status: 400 });
     }
 
     const stops = (body.stops ?? []).filter((stop) => stop.collectionPointId && stop.stopOrder > 0);
@@ -31,11 +31,22 @@ export async function POST(request: Request) {
     }
 
     const supabase = getServiceSupabase();
+    let resolvedZoneId: string;
+    try {
+      resolvedZoneId = await resolveTemplateZoneId(supabase, {
+        explicitZoneId: body.zoneId,
+        collectionPointIds: stops.map((s) => s.collectionPointId),
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not resolve zone.";
+      return NextResponse.json({ ok: false, message: msg }, { status: 400 });
+    }
+
     const { data: template, error: templateError } = await supabase
       .from("route_templates")
       .insert({
         name: body.name,
-        zone_id: body.zoneId,
+        zone_id: resolvedZoneId,
         recurrence_day: body.recurrenceDay,
         created_by: body.createdBy ?? null,
       })

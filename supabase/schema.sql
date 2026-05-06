@@ -782,6 +782,15 @@ for select
 to anon, authenticated
 using (true);
 
+-- Reference zones for schedules, templates, and dashboard dropdowns.
+alter table public.zones enable row level security;
+drop policy if exists "zones_select_public" on public.zones;
+create policy "zones_select_public"
+on public.zones
+for select
+to anon, authenticated
+using (true);
+
 alter table public.app_config enable row level security;
 drop policy if exists "app_config_select_public" on public.app_config;
 create policy "app_config_select_public"
