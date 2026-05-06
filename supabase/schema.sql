@@ -323,6 +323,31 @@ create table if not exists app_user_profiles (
 
 create index if not exists idx_app_user_profiles_role on app_user_profiles (role);
 
+-- RLS: each user can read and update only their own profile row.
+alter table public.app_user_profiles enable row level security;
+
+drop policy if exists "profiles_select_own" on public.app_user_profiles;
+create policy "profiles_select_own"
+  on public.app_user_profiles
+  for select
+  to authenticated
+  using (auth.uid() = user_id);
+
+drop policy if exists "profiles_update_own" on public.app_user_profiles;
+create policy "profiles_update_own"
+  on public.app_user_profiles
+  for update
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "profiles_insert_own" on public.app_user_profiles;
+create policy "profiles_insert_own"
+  on public.app_user_profiles
+  for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
 -- Demo-only admin credential seed for hackathon local testing
 -- Replace/remove before production.
 create table if not exists admin_access_secrets (

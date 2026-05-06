@@ -5,7 +5,8 @@ enum AppUserRole {
 }
 
 AppUserRole parseUserRole(String? rawRole) {
-  switch (rawRole) {
+  final String normalized = (rawRole ?? '').trim().toLowerCase();
+  switch (normalized) {
     case 'driver':
       return AppUserRole.driver;
     case 'admin':
