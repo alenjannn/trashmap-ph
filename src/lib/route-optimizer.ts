@@ -118,55 +118,6 @@ function splitStopsIntoBuckets(stops: StopSeed[], bucketCount: number): StopSeed
   return buckets;
 }
 
-function parseDurationMinutes(durationSeconds: unknown, fallback: number): number {
-  if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
-    return Math.max(10, Math.round(durationSeconds / 60));
-  }
-  return fallback;
-}
-
-function parseDistanceKm(distanceMeters: unknown, fallback: number): number {
-  if (typeof distanceMeters === "number" && Number.isFinite(distanceMeters)) {
-    return Number(Math.max(0.1, distanceMeters / 1000).toFixed(2));
-  }
-  return fallback;
-}
-
-async function estimateWithORS(orsKey: string, stops: StopSeed[]): Promise<{ distanceKm: number; durationMin: number }> {
-  if (stops.length < 2) {
-    return { distanceKm: estimateDistanceKm(stops), durationMin: Math.max(15, stops.length * 12) };
-  }
-
-  const coordinates = stops.map((stop) => [stop.lng, stop.lat]);
-  const response = await fetch("https://api.openrouteservice.org/v2/directions/driving-car", {
-    method: "POST",
-    headers: {
-      Authorization: orsKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      coordinates,
-      instructions: false,
-      units: "m",
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`ORS directions failed (${response.status})`);
-  }
-
-  const payload = (await response.json()) as {
-    routes?: Array<{ summary?: { distance?: number; duration?: number } }>;
-  };
-  const summary = payload.routes?.[0]?.summary;
-  const fallbackDistance = estimateDistanceKm(stops);
-  const fallbackDuration = Math.max(25, stops.length * 18);
-  return {
-    distanceKm: parseDistanceKm(summary?.distance, fallbackDistance),
-    durationMin: parseDurationMinutes(summary?.duration, fallbackDuration),
-  };
-}
-
 function getSupabaseServerClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
