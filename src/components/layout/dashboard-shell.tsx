@@ -431,7 +431,7 @@ export function DashboardShell() {
     }
 
     async function loadRoutesAndProgress() {
-      const routeDate = new Date().toISOString().slice(0, 10);
+      const routeDate = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" });
       const { data: trucksData } = await client
         .from("trucks")
         .select("id, truck_code, driver_name")

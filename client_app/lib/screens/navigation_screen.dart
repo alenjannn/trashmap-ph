@@ -213,6 +213,16 @@ class _NavigationScreenState extends State<NavigationScreen> {
             .eq('stop_id', stop.id);
       }
 
+      await SupabaseService.client.from('route_audit_logs').insert(<String, dynamic>{
+        'route_id': widget.routeId,
+        'stop_id': stop.id,
+        'event_type': 'stop_completed',
+        'actor_user_id': userId,
+        'actor_role': 'driver',
+        'area_label': stop.label,
+        'metadata_json': <String, dynamic>{},
+      });
+
       _engine.markStopCompleted(stop.id);
       if (!mounted) return;
       setState(() {
