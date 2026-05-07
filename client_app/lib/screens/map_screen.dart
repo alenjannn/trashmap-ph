@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:client_app/services/supabase_service.dart';
@@ -37,6 +39,7 @@ class _MapScreenState extends State<MapScreen> {
   late LatLng? _localSelectedPoint;
   List<_ReportPin> _liveReportPins = <_ReportPin>[];
   RealtimeChannel? _reportsChannel;
+  _ReportPin? _selectedPin;
 
   @override
   void initState() {
@@ -89,55 +92,6 @@ class _MapScreenState extends State<MapScreen> {
         );
       }).toList();
     });
-  }
-
-  void _showPinInfo(BuildContext ctx, _ReportPin pin) {
-    final String label = _wasteLabel(pin.wasteType);
-    showModalBottomSheet<void>(
-      context: ctx,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (BuildContext _) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.only(bottom: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              Row(
-                children: <Widget>[
-                  const Icon(Icons.delete_outline, color: Color(0xFFDC2626), size: 22),
-                  const SizedBox(width: 8),
-                  const Text(
-                    'Reported Garbage',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              _InfoRow(label: 'Waste Type', value: label),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: 'Description',
-                value: (pin.description?.isNotEmpty ?? false) ? pin.description! : '—',
-              ),
-            ],
-          ),
-        );
-      },
-    );
   }
 
   String _wasteLabel(String raw) {
@@ -199,20 +153,26 @@ class _MapScreenState extends State<MapScreen> {
                   interactionOptions: const InteractionOptions(
                     flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
                   ),
-                  onTap: widget.isPinDropMode
-                      ? (_, LatLng latLng) {
-                          setState(() => _localSelectedPoint = latLng);
-                          widget.onPinSelected?.call(latLng);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                'Pin set: ${latLng.latitude.toStringAsFixed(6)}, ${latLng.longitude.toStringAsFixed(6)}',
-                              ),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        }
-                      : null,
+                  onTap: (_, LatLng latLng) {
+                    if (widget.isPinDropMode) {
+                      setState(() {
+                        _localSelectedPoint = latLng;
+                        _selectedPin = null;
+                      });
+                      widget.onPinSelected?.call(latLng);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Pin set: ${latLng.latitude.toStringAsFixed(6)}, ${latLng.longitude.toStringAsFixed(6)}',
+                          ),
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    } else {
+                      // Dismiss any open popup on empty map tap
+                      if (_selectedPin != null) setState(() => _selectedPin = null);
+                    }
+                  },
                 ),
                 children: <Widget>[
                   TileLayer(
@@ -226,8 +186,14 @@ class _MapScreenState extends State<MapScreen> {
                         width: 40,
                         height: 40,
                         child: GestureDetector(
-                          onTap: () => _showPinInfo(context, pin),
-                          child: const Icon(Icons.location_on, color: Color(0xFFDC2626), size: 34),
+                          onTap: () => setState(() => _selectedPin = pin),
+                          child: Icon(
+                            Icons.location_on,
+                            color: _selectedPin == pin
+                                ? const Color(0xFFB91C1C)
+                                : const Color(0xFFDC2626),
+                            size: 34,
+                          ),
                         ),
                       );
                     }).toList(),
@@ -247,6 +213,23 @@ class _MapScreenState extends State<MapScreen> {
                         ),
                       ],
                     ),
+                  // Inline popup above selected pin
+                  if (_selectedPin != null)
+                    MarkerLayer(
+                      markers: <Marker>[
+                        Marker(
+                          point: _selectedPin!.point,
+                          width: 220,
+                          height: 160,
+                          alignment: Alignment.bottomCenter,
+                          child: _PinPopupCard(
+                            pin: _selectedPin!,
+                            wasteLabel: _wasteLabel(_selectedPin!.wasteType),
+                            onClose: () => setState(() => _selectedPin = null),
+                          ),
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -257,8 +240,104 @@ class _MapScreenState extends State<MapScreen> {
   }
 }
 
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
+/// Inline popup card that floats above a pressed map pin.
+/// Rendered as a Marker with alignment: Alignment.bottomCenter so it sits
+/// directly above the geographic pin point.
+class _PinPopupCard extends StatelessWidget {
+  const _PinPopupCard({
+    required this.pin,
+    required this.wasteLabel,
+    required this.onClose,
+  });
+
+  final _ReportPin pin;
+  final String wasteLabel;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final String lat = pin.point.latitude.toStringAsFixed(6);
+    final String lng = pin.point.longitude.toStringAsFixed(6);
+    final String desc =
+        (pin.description?.isNotEmpty ?? false) ? pin.description! : '—';
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        // Card body
+        Container(
+          width: 220,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: const <BoxShadow>[
+              BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 10,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              // Header
+              Container(
+                padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    const Icon(Icons.delete_outline, color: Color(0xFFDC2626), size: 16),
+                    const SizedBox(width: 6),
+                    const Expanded(
+                      child: Text(
+                        'Reported Garbage',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF111827),
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: onClose,
+                      child: const Icon(Icons.close, size: 16, color: Color(0xFF6B7280)),
+                    ),
+                  ],
+                ),
+              ),
+              // Info rows
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+                child: Column(
+                  children: <Widget>[
+                    _PopupRow(label: 'Type', value: wasteLabel),
+                    const SizedBox(height: 4),
+                    _PopupRow(label: 'Description', value: desc),
+                    const SizedBox(height: 4),
+                    _PopupRow(label: 'Location', value: '$lat, $lng'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Caret pointing down to pin
+        CustomPaint(
+          size: const Size(16, 8),
+          painter: _CaretPainter(),
+        ),
+      ],
+    );
+  }
+}
+
+class _PopupRow extends StatelessWidget {
+  const _PopupRow({required this.label, required this.value});
   final String label;
   final String value;
 
@@ -268,19 +347,49 @@ class _InfoRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
         SizedBox(
-          width: 110,
+          width: 72,
           child: Text(
             label,
-            style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280), fontWeight: FontWeight.w500),
+            style: const TextStyle(
+              fontSize: 11,
+              color: Color(0xFF6B7280),
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ),
         Expanded(
           child: Text(
             value,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF111827)),
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF111827),
+            ),
           ),
         ),
       ],
     );
   }
+}
+
+/// Small downward-pointing triangle connecting card to pin.
+class _CaretPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()..color = Colors.white;
+    final ui.Path path = ui.Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width / 2, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+    final Paint shadow = Paint()
+      ..color = const Color(0x22000000)
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    canvas.drawPath(path, shadow);
+  }
+
+  @override
+  bool shouldRepaint(_CaretPainter oldDelegate) => false;
 }
