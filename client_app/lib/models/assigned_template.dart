@@ -33,16 +33,8 @@ class AssignedTemplate {
       final String? day = t['recurrence_day'] as String?;
       if (name == null || day == null) return null;
       
-      // weekly_routes uses integer hours (start_hour, end_hour). Render as HH:00:00
-      // strings so existing UI code that expects time strings keeps working.
-      final int startH = (t['start_hour'] is num)
-          ? (t['start_hour'] as num).toInt()
-          : int.tryParse((t['start_hour'] ?? '6').toString()) ?? 6;
-      final int endH = (t['end_hour'] is num)
-          ? (t['end_hour'] as num).toInt()
-          : int.tryParse((t['end_hour'] ?? '12').toString()) ?? 12;
-      final String start = '${startH.toString().padLeft(2, '0')}:00:00';
-      final String end = '${endH.toString().padLeft(2, '0')}:00:00';
+      final String start = (t['time_window_start'] ?? '06:00:00').toString();
+      final String end = (t['time_window_end'] ?? '09:00:00').toString();
       final bool active = t['is_active'] as bool? ?? true;
       final String assignedAt =
           (row['assigned_at'] as String?) ?? DateTime.now().toUtc().toIso8601String();

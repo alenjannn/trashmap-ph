@@ -12,8 +12,8 @@ class ScheduleScreen extends StatefulWidget {
 }
 
 class _ScheduleScreenState extends State<ScheduleScreen> {
-  // 300m diameter = 150m radius
-  static const double _radiusMeters = 150.0;
+  // 200m radius geofencing
+  static const double _radiusMeters = 200.0;
 
   static const Map<String, int> _dayOrder = <String, int>{
     'monday': 1,
@@ -90,7 +90,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       final dynamic routeResponse = await SupabaseService.client
           .from('weekly_routes')
           .select(
-            'id, name, recurrence_day, start_hour, end_hour, zone_id, '
+            'id, name, recurrence_day, time_window_start, time_window_end, zone_id, '
             'zones(id, name), '
             'weekly_route_stops(collection_points(id, lat, lng, is_active))',
           )
@@ -134,9 +134,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         final String dayB = (b['recurrence_day'] ?? '').toString().toLowerCase();
         final int cmp = (_dayOrder[dayA] ?? 99).compareTo(_dayOrder[dayB] ?? 99);
         if (cmp != 0) return cmp;
-        final int hA = (a['start_hour'] as num?)?.toInt() ?? 0;
-        final int hB = (b['start_hour'] as num?)?.toInt() ?? 0;
-        return hA.compareTo(hB);
+        final String tA = (a['time_window_start'] ?? '').toString();
+        final String tB = (b['time_window_start'] ?? '').toString();
+        return tA.compareTo(tB);
       });
 
       if (!mounted) return;
@@ -145,7 +145,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         _position = position;
         _loading = false;
         _locationStatus = _schedules.isEmpty
-            ? 'No collection points within 300m'
+            ? 'No collection points within 200m'
             : 'Found nearby collection points';
       });
     } catch (error) {
@@ -164,10 +164,11 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     return rawDay.toLowerCase() == weekdays[DateTime.now().weekday - 1];
   }
 
-  String _formatHour(dynamic raw) {
-    final int h = (raw is num) ? raw.toInt() : int.tryParse((raw ?? '').toString()) ?? 0;
-    final int hh = h.clamp(0, 24);
-    return '${hh.toString().padLeft(2, '0')}:00';
+  String _formatTime(dynamic raw) {
+    final String t = (raw ?? '').toString();
+    if (t.isEmpty) return '--:--';
+    final List<String> parts = t.split(':');
+    return parts.length >= 2 ? '${parts[0]}:${parts[1]}' : t;
   }
 
   @override
@@ -228,10 +229,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           if (_schedules.isEmpty && _error == null)
             SectionCard(
               title: 'No Routes',
-              subtitle: '300m Diameter Scan',
+              subtitle: '200m Proximity Scan',
               icon: Icons.not_listed_location_rounded,
               child: const Text(
-                'No collection points found within 300m of your location. Make sure you are at a designated pickup spot.',
+                'No collection points found within 200m of your location. Make sure you are at a designated pickup spot.',
                 style: TextStyle(height: 1.6, color: Color(0xFF64748B), fontSize: 13),
               ),
             ),
@@ -242,9 +243,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
             final String dayRaw = (row['recurrence_day'] ?? '').toString();
             final bool today = _isToday(dayRaw);
 
+            final String routeName = row['name']?.toString() ?? 'Weekly Route';
+            final String dayLabel = _dayLabel(dayRaw);
+            final String fullSubtitle = '$zoneName • $dayLabel';
+
             return SectionCard(
-              title: zoneName,
-              subtitle: _dayLabel(dayRaw),
+              title: routeName,
+              subtitle: fullSubtitle,
               icon: Icons.local_shipping_rounded,
               child: Container(
                 padding: const EdgeInsets.all(16),
@@ -264,7 +269,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                         ),
                         const SizedBox(width: 12),
                         Text(
-                          '${_formatHour(row['start_hour'])} – ${_formatHour(row['end_hour'])}',
+                          '${_formatTime(row['time_window_start'])} – ${_formatTime(row['time_window_end'])}',
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w900,
