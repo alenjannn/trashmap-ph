@@ -246,7 +246,7 @@ class _MapScreenState extends State<MapScreen> {
                   Marker(
                     point: _selectedPin!.point,
                     width: 240,
-                    height: 180,
+                    height: 220,
                     alignment: Alignment.bottomCenter,
                     child: _PinPopupCard(
                       pin: _selectedPin!,

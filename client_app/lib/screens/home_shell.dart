@@ -25,6 +25,7 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _selectedIndex = 2; // Default to Schedule
+  bool _isPinDropMode = false;
   LatLng? _selectedReportPoint;
   final List<RouteNotificationItem> _routeNotifications = [];
   RealtimeChannel? _notifsChannel;
@@ -118,9 +119,11 @@ class _HomeShellState extends State<HomeShell> {
             children: [
               MapScreen(
                 selectedPoint: _selectedReportPoint,
+                isPinDropMode: _isPinDropMode,
                 onPinSelected: (LatLng point) {
                   setState(() {
                     _selectedReportPoint = point;
+                    _isPinDropMode = false; // pin placed – drop mode off
                   });
                 },
               ),
@@ -128,6 +131,7 @@ class _HomeShellState extends State<HomeShell> {
                 selectedPoint: _selectedReportPoint,
                 onRequestPinTab: () {
                   setState(() {
+                    _isPinDropMode = true;
                     _selectedIndex = 0;
                   });
                 },
@@ -298,6 +302,7 @@ class _HomeShellState extends State<HomeShell> {
                   onDestinationSelected: (int index) {
                     setState(() {
                       _selectedIndex = index;
+                      if (index != 0) _isPinDropMode = false;
                     });
                   },
                   destinations: const <NavigationDestination>[
