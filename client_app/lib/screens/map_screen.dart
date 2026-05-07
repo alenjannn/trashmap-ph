@@ -153,10 +153,18 @@ class _MapScreenState extends State<MapScreen> {
                   InteractiveFlag.drag |
                   InteractiveFlag.tap,
             ),
-            onTap: (_, __) {
-              // Dismiss any open report-pin popup on map tap.
-              // Pin placement is handled by the GestureDetector overlay below.
-              if (_selectedPin != null) setState(() => _selectedPin = null);
+            onTap: (_, LatLng latLng) {
+              if (widget.isPinDropMode) {
+                // Drop pin at tapped location and notify parent.
+                setState(() {
+                  _localSelectedPoint = latLng;
+                  _selectedPin = null;
+                });
+                widget.onPinSelected?.call(latLng);
+              } else {
+                // Dismiss any open report-pin popup.
+                if (_selectedPin != null) setState(() => _selectedPin = null);
+              }
             },
           ),
           children: <Widget>[
@@ -254,26 +262,6 @@ class _MapScreenState extends State<MapScreen> {
               ),
           ],
         ),
-
-        // Pin-drop overlay — sits above the map but below the controls.
-        // Uses GestureDetector.onTapUp + camera.pointToLatLng for reliable
-        // coordinate conversion regardless of flutter_map gesture state.
-        if (widget.isPinDropMode)
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTapUp: (TapUpDetails details) {
-                final LatLng latLng = _mapController.camera.pointToLatLng(
-                  details.localPosition,
-                );
-                setState(() {
-                  _localSelectedPoint = latLng;
-                  _selectedPin = null;
-                });
-                widget.onPinSelected?.call(latLng);
-              },
-            ),
-          ),
 
         // Floating Header (IgnorePointer allows tapping the map through the gradient)
         Positioned(
