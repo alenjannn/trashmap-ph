@@ -47,7 +47,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     const { data: template, error: tplError } = await supabase
-      .from("route_templates")
+      .from("weekly_routes")
       .select("id, name, recurrence_day, start_hour, end_hour")
       .eq("id", templateId)
       .single();

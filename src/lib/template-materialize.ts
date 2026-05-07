@@ -41,7 +41,7 @@ export async function materializeTemplateForDate(
   orsKey: string,
 ): Promise<MaterializeResult> {
   const { data: template, error: tplError } = await supabase
-    .from("route_templates")
+    .from("weekly_routes")
     .select("id, name, zone_id, recurrence_day, is_active")
     .eq("id", templateId)
     .single();

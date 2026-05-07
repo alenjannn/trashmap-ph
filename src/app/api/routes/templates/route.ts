@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     }
 
     const { data: template, error: templateError } = await supabase
-      .from("route_templates")
+      .from("weekly_routes")
       .insert({
         name: body.name,
         zone_id: resolvedZoneId,

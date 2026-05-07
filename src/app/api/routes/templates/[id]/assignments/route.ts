@@ -15,7 +15,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     const supabase = getServiceSupabase();
 
     const { data: template, error: tplError } = await supabase
-      .from("route_templates")
+      .from("weekly_routes")
       .select("id")
       .eq("id", templateId)
       .maybeSingle();
@@ -73,7 +73,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const supabase = getServiceSupabase();
 
     const { data: template, error: tplError } = await supabase
-      .from("route_templates")
+      .from("weekly_routes")
       .select("id")
       .eq("id", templateId)
       .maybeSingle();

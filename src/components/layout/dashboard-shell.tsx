@@ -664,7 +664,7 @@ export function DashboardShell() {
 
     async function loadRouteTemplates(): Promise<string | null> {
       const { data, error } = await client
-        .from("route_templates")
+        .from("weekly_routes")
         .select("id, name, recurrence_day, is_active")
         .order("created_at", { ascending: false })
         .limit(40);
@@ -806,7 +806,7 @@ export function DashboardShell() {
       .channel("dashboard-route-templates-live-v1")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "route_templates" },
+        { event: "*", schema: "public", table: "weekly_routes" },
         () => {
           void loadRouteTemplates();
         },

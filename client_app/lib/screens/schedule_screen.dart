@@ -84,13 +84,20 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final Position? position = await _resolvePosition();
 
     try {
-      // 1. Fetch from weekly_routes (formerly route_templates)
+      // Fetch weekly_routes joined with assigned collection points (route_template_stops → collection_points)
+      // and zone label. Filter happens client-side: user must be within 150m radius (300m diameter)
+      // of at least one collection point ASSIGNED to that weekly route.
       final dynamic routeResponse = await SupabaseService.client
           .from('weekly_routes')
-          .select('id, recurrence_day, time_window_start, time_window_end, zone_id, zones(id, name, lat, lng)')
+          .select(
+            'id, name, recurrence_day, start_hour, end_hour, zone_id, '
+            'zones(id, name), '
+            'route_template_stops(collection_points(id, lat, lng, is_active))',
+          )
           .eq('is_active', true);
 
-      final List<Map<String, dynamic>> rawRoutes = List<Map<String, dynamic>>.from(routeResponse as List<dynamic>);
+      final List<Map<String, dynamic>> rawRoutes =
+          List<Map<String, dynamic>>.from(routeResponse as List<dynamic>);
 
       if (position == null) {
         if (!mounted) return;
@@ -102,32 +109,34 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         return;
       }
 
-      // 2. Fetch all collection points for these zones
-      final List<String> zoneIds = rawRoutes.map((s) => s['zone_id'].toString()).toSet().toList();
-      final dynamic pointsResponse = await SupabaseService.client
-          .from('collection_points')
-          .select('id, zone_id, lat, lng')
-          .eq('is_active', true)
-          .inFilter('zone_id', zoneIds);
-
-      final List<Map<String, dynamic>> allPoints = List<Map<String, dynamic>>.from(pointsResponse as List<dynamic>);
-
-      // 3. Filter: User must be near a collection point assigned to this weekly route
+      // Filter: only keep weekly_routes that have at least one assigned collection point
+      // within _radiusMeters of the citizen's current GPS fix.
       final List<Map<String, dynamic>> filteredRoutes = rawRoutes.where((route) {
-        final String sZoneId = route['zone_id'].toString();
-        final zonePoints = allPoints.where((p) => p['zone_id'].toString() == sZoneId);
-        
-        return zonePoints.any((p) {
-          final double pLat = (p['lat'] as num).toDouble();
-          final double pLng = (p['lng'] as num).toDouble();
-          return _calcDist(position.latitude, position.longitude, pLat, pLng) <= _radiusMeters;
-        });
+        final dynamic stops = route['route_template_stops'];
+        if (stops is! List) return false;
+        for (final dynamic stop in stops) {
+          final dynamic cp = stop is Map<String, dynamic> ? stop['collection_points'] : null;
+          if (cp is! Map<String, dynamic>) continue;
+          if (cp['is_active'] == false) continue;
+          final num? lat = cp['lat'] as num?;
+          final num? lng = cp['lng'] as num?;
+          if (lat == null || lng == null) continue;
+          if (_calcDist(position.latitude, position.longitude, lat.toDouble(), lng.toDouble()) <=
+              _radiusMeters) {
+            return true;
+          }
+        }
+        return false;
       }).toList();
 
       filteredRoutes.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
         final String dayA = (a['recurrence_day'] ?? '').toString().toLowerCase();
         final String dayB = (b['recurrence_day'] ?? '').toString().toLowerCase();
-        return (_dayOrder[dayA] ?? 99).compareTo(_dayOrder[dayB] ?? 99);
+        final int cmp = (_dayOrder[dayA] ?? 99).compareTo(_dayOrder[dayB] ?? 99);
+        if (cmp != 0) return cmp;
+        final int hA = (a['start_hour'] as num?)?.toInt() ?? 0;
+        final int hB = (b['start_hour'] as num?)?.toInt() ?? 0;
+        return hA.compareTo(hB);
       });
 
       if (!mounted) return;
@@ -135,7 +144,9 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         _schedules = filteredRoutes;
         _position = position;
         _loading = false;
-        _locationStatus = _schedules.isEmpty ? 'No collection points within 300m' : 'Found nearby collection points';
+        _locationStatus = _schedules.isEmpty
+            ? 'No collection points within 300m'
+            : 'Found nearby collection points';
       });
     } catch (error) {
       if (!mounted) return;
@@ -153,11 +164,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     return rawDay.toLowerCase() == weekdays[DateTime.now().weekday - 1];
   }
 
-  String _formatTime(dynamic raw) {
-    final String t = (raw ?? '').toString();
-    if (t.isEmpty) return '--:--';
-    final List<String> parts = t.split(':');
-    return parts.length >= 2 ? '${parts[0]}:${parts[1]}' : t;
+  String _formatHour(dynamic raw) {
+    final int h = (raw is num) ? raw.toInt() : int.tryParse((raw ?? '').toString()) ?? 0;
+    final int hh = h.clamp(0, 24);
+    return '${hh.toString().padLeft(2, '0')}:00';
   }
 
   @override
@@ -254,7 +264,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
                         ),
                         const SizedBox(width: 12),
                         Text(
-                          '${_formatTime(row['time_window_start'])} – ${_formatTime(row['time_window_end'])}',
+                          '${_formatHour(row['start_hour'])} – ${_formatHour(row['end_hour'])}',
                           style: TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.w900,

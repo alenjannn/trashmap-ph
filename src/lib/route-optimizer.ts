@@ -117,7 +117,7 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
 
   // Load active weekly route templates with their ordered stops + CP coords.
   const { data: templateRows, error: templatesError } = await supabase
-    .from("route_templates")
+    .from("weekly_routes")
     .select(
       "id, name, zone_id, is_active, route_template_stops(stop_order, collection_points(id, label, lat, lng))",
     )

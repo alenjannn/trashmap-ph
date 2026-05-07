@@ -88,7 +88,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
 
     // 3) Delete the template. route_template_stops cascade via existing FK.
     const { error: tplDeleteError } = await supabase
-      .from("route_templates")
+      .from("weekly_routes")
       .delete()
       .eq("id", id);
     if (tplDeleteError) {
