@@ -62,14 +62,16 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     }
   }
 
-  double _distanceMeters(double lat1, double lng1, double lat2, double lng2) {
-    const double r = 6371000; 
-    final double phi1 = lat1 * pi / 180;
-    final double phi2 = lat2 * pi / 180;
-    final double dPhi = (lat2 - lat1) * pi / 180;
-    final double dLambda = (lng2 - lng1) * pi / 180;
-    final double a = sin(dPhi / 2) * sin(dPhi / 2) + cos(phi1) * cos(phi2) * sin(dLambda / 2) * sin(dLambda / 2);
-    return r * 2 * atan2(sqrt(a), sqrt(1 - a));
+  // Calculate Haversine distance in meters
+  // Re-implementing correctly with math.
+  double _calcDist(double lat1, double lon1, double lat2, double lon2) {
+    const r = 6371000;
+    final dLat = (lat2 - lat1) * (pi / 180);
+    final dLon = (lon2 - lon1) * (pi / 180);
+    final a = sin(dLat / 2) * sin(dLat / 2) +
+        cos(lat1 * pi / 180) * cos(lat2 * pi / 180) * sin(dLon / 2) * sin(dLon / 2);
+    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    return r * c;
   }
 
   Future<void> _loadData() async {
@@ -82,13 +84,13 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final Position? position = await _resolvePosition();
 
     try {
-      // 1. Fetch all active schedules with their zones
-      final dynamic scheduleResponse = await SupabaseService.client
-          .from('schedules')
-          .select('id, collection_day, time_window_start, time_window_end, zone_id, zones(id, name, lat, lng)')
+      // 1. Fetch from weekly_routes (formerly route_templates)
+      final dynamic routeResponse = await SupabaseService.client
+          .from('weekly_routes')
+          .select('id, recurrence_day, time_window_start, time_window_end, zone_id, zones(id, name, lat, lng)')
           .eq('is_active', true);
 
-      final List<Map<String, dynamic>> rawSchedules = List<Map<String, dynamic>>.from(scheduleResponse as List<dynamic>);
+      final List<Map<String, dynamic>> rawRoutes = List<Map<String, dynamic>>.from(routeResponse as List<dynamic>);
 
       if (position == null) {
         if (!mounted) return;
@@ -100,8 +102,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         return;
       }
 
-      // 2. Fetch all collection points that are assigned to any of these zones
-      final List<String> zoneIds = rawSchedules.map((s) => s['zone_id'].toString()).toSet().toList();
+      // 2. Fetch all collection points for these zones
+      final List<String> zoneIds = rawRoutes.map((s) => s['zone_id'].toString()).toSet().toList();
       final dynamic pointsResponse = await SupabaseService.client
           .from('collection_points')
           .select('id, zone_id, lat, lng')
@@ -110,27 +112,27 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
       final List<Map<String, dynamic>> allPoints = List<Map<String, dynamic>>.from(pointsResponse as List<dynamic>);
 
-      // 3. Filter schedules: Only keep those where at least one collection point in its zone is within 150m
-      final List<Map<String, dynamic>> filteredSchedules = rawSchedules.where((schedule) {
-        final String sZoneId = schedule['zone_id'].toString();
+      // 3. Filter: User must be near a collection point assigned to this weekly route
+      final List<Map<String, dynamic>> filteredRoutes = rawRoutes.where((route) {
+        final String sZoneId = route['zone_id'].toString();
         final zonePoints = allPoints.where((p) => p['zone_id'].toString() == sZoneId);
         
         return zonePoints.any((p) {
           final double pLat = (p['lat'] as num).toDouble();
           final double pLng = (p['lng'] as num).toDouble();
-          return _distanceMeters(position.latitude, position.longitude, pLat, pLng) <= _radiusMeters;
+          return _calcDist(position.latitude, position.longitude, pLat, pLng) <= _radiusMeters;
         });
       }).toList();
 
-      filteredSchedules.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
-        final String dayA = (a['collection_day'] ?? '').toString().toLowerCase();
-        final String dayB = (b['collection_day'] ?? '').toString().toLowerCase();
+      filteredRoutes.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
+        final String dayA = (a['recurrence_day'] ?? '').toString().toLowerCase();
+        final String dayB = (b['recurrence_day'] ?? '').toString().toLowerCase();
         return (_dayOrder[dayA] ?? 99).compareTo(_dayOrder[dayB] ?? 99);
       });
 
       if (!mounted) return;
       setState(() {
-        _schedules = filteredSchedules;
+        _schedules = filteredRoutes;
         _position = position;
         _loading = false;
         _locationStatus = _schedules.isEmpty ? 'No collection points within 300m' : 'Found nearby collection points';
@@ -227,7 +229,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           ..._schedules.map((Map<String, dynamic> row) {
             final dynamic zone = row['zones'];
             final String zoneName = zone is Map<String, dynamic> ? (zone['name']?.toString() ?? 'Zone') : 'Zone';
-            final String dayRaw = (row['collection_day'] ?? '').toString();
+            final String dayRaw = (row['recurrence_day'] ?? '').toString();
             final bool today = _isToday(dayRaw);
 
             return SectionCard(

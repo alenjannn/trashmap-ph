@@ -51,9 +51,9 @@ class _AssignedTemplatesScreenState extends State<AssignedTemplatesScreen> {
   }
 
   String _windowLabel(AssignedTemplate t) {
-    final String a = t.startHour.toString().padLeft(2, '0');
-    final String b = t.endHour.toString().padLeft(2, '0');
-    return '${_dayShort(t.recurrenceDay)} $a:00–$b:00';
+    final String start = t.startTime.split(':').take(2).join(':');
+    final String end = t.endTime.split(':').take(2).join(':');
+    return '${_dayShort(t.recurrenceDay)} $start–$end';
   }
 
   Widget _gateBadge(RouteGate gate) {
@@ -141,8 +141,8 @@ class _AssignedTemplatesScreenState extends State<AssignedTemplatesScreen> {
                             final AssignedTemplate t = _templates[index];
                             final RouteGate gate = computeRouteGate(
                               recurrenceDay: t.recurrenceDay,
-                              startHour: t.startHour,
-                              endHour: t.endHour,
+                              startTime: t.startTime,
+                              endTime: t.endTime,
                             );
                             return Material(
                               color: Colors.white,

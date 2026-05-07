@@ -78,7 +78,7 @@ class _TemplatePreviewScreenState extends State<TemplatePreviewScreen> {
       final List<dynamic> routeRows = await SupabaseService.client
           .from('routes')
           .select('id, polyline')
-          .eq('template_id', widget.template.templateId)
+          .eq('weekly_route_id', widget.template.templateId)
           .eq('route_date', manilaDate)
           .order('created_at', ascending: false)
           .limit(1) as List<dynamic>;
@@ -90,9 +90,9 @@ class _TemplatePreviewScreenState extends State<TemplatePreviewScreen> {
       final String? polylineStr = routeRow == null ? null : routeRow['polyline'] as String?;
 
       final List<dynamic> stopsRes = await SupabaseService.client
-          .from('route_template_stops')
+          .from('weekly_route_stops')
           .select('stop_order, collection_points ( label, lat, lng )')
-          .eq('template_id', widget.template.templateId)
+          .eq('weekly_route_id', widget.template.templateId)
           .order('stop_order', ascending: true);
 
       final List<_PreviewStop> loaded = <_PreviewStop>[];
@@ -209,16 +209,16 @@ class _TemplatePreviewScreenState extends State<TemplatePreviewScreen> {
   Widget build(BuildContext context) {
     final RouteGate gate = computeRouteGate(
       recurrenceDay: widget.template.recurrenceDay,
-      startHour: widget.template.startHour,
-      endHour: widget.template.endHour,
+      startTime: widget.template.startTime,
+      endTime: widget.template.endTime,
     );
 
     final LatLng center = _polylinePoints.isNotEmpty
         ? _polylinePoints[_polylinePoints.length ~/ 2]
         : (_stops.isNotEmpty ? _stops.first.point : const LatLng(14.676, 121.0437));
 
-    final String sh = widget.template.startHour.toString().padLeft(2, '0');
-    final String eh = widget.template.endHour.toString().padLeft(2, '0');
+    final String sh = widget.template.startTime.split(':').take(2).join(':');
+    final String eh = widget.template.endTime.split(':').take(2).join(':');
 
     return Scaffold(
       appBar: AppBar(
@@ -235,7 +235,7 @@ class _TemplatePreviewScreenState extends State<TemplatePreviewScreen> {
                     children: <Widget>[
                       Expanded(
                         child: Text(
-                          '${_capDay(widget.template.recurrenceDay)} $sh:00–$eh:00',
+                          '${_capDay(widget.template.recurrenceDay)} $sh–$eh',
                           style: const TextStyle(fontSize: 13),
                         ),
                       ),

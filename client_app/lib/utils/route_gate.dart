@@ -31,14 +31,18 @@ int _todayOrderFromWeekday(int dartWeekday) {
 
 RouteGate computeRouteGate({
   required String recurrenceDay,
-  required int startHour,
-  required int endHour,
+  required String startTime,
+  required String endTime,
 }) {
   final int scheduled = _scheduledDayOrder(recurrenceDay);
   final tz.Location manila = tz.getLocation('Asia/Manila');
   final tz.TZDateTime now = tz.TZDateTime.now(manila);
   final int today = _todayOrderFromWeekday(now.weekday);
   final int hour = now.hour;
+
+  // Simple parsing of "HH:MM:SS" or "HH:MM"
+  final int startHour = int.tryParse(startTime.split(':')[0]) ?? 0;
+  final int endHour = int.tryParse(endTime.split(':')[0]) ?? 24;
 
   if (today < scheduled) return RouteGate.early;
   if (today > scheduled) return RouteGate.late;

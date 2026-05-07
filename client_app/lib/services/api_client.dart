@@ -64,9 +64,9 @@ class ApiClient {
     if (userId == null || userId.isEmpty) return <AssignedTemplate>[];
 
     final dynamic res = await SupabaseService.client
-        .from('route_template_assignments')
+        .from('weekly_route_assignments')
         .select(
-          'id, template_id, assigned_at, route_templates ( id, name, recurrence_day, start_hour, end_hour, is_active )',
+          'id, weekly_route_id, assigned_at, weekly_routes ( id, name, recurrence_day, time_window_start, time_window_end, is_active )',
         )
         .eq('driver_id', userId)
         .eq('is_active', true);
