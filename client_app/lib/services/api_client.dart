@@ -10,7 +10,12 @@ class ApiClient {
 
   final String baseUrl;
 
-  static const String _baseUrlFromEnvironment = String.fromEnvironment('API_BASE_URL');
+  // Dev fallback: LAN IP of the host machine running `npm run dev`.
+  // Physical device → LAN IP; emulator → 10.0.2.2; desktop → localhost.
+  static const String _devBaseUrl = 'http://192.168.1.223:3000';
+
+  static const String _baseUrlFromEnvironment =
+      String.fromEnvironment('API_BASE_URL', defaultValue: _devBaseUrl);
 
   static String _resolveBaseUrl(String? override) {
     final String raw = override ?? _baseUrlFromEnvironment;
