@@ -123,7 +123,8 @@ class _HomeShellState extends State<HomeShell> {
                 onPinSelected: (LatLng point) {
                   setState(() {
                     _selectedReportPoint = point;
-                    _isPinDropMode = false; // pin placed – drop mode off
+                    _isPinDropMode = false; // pin placed — drop mode off
+                    _selectedIndex = 1;    // return to Report tab
                   });
                 },
               ),

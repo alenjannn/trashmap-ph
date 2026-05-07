@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -149,18 +150,14 @@ class _MapScreenState extends State<MapScreen> {
             initialCenter: _localSelectedPoint ?? qcCenter,
             initialZoom: 14,
             interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
+              flags: InteractiveFlag.pinchZoom |
+                  InteractiveFlag.drag |
+                  InteractiveFlag.tap,
             ),
-            onTap: (_, LatLng latLng) {
-              if (widget.isPinDropMode) {
-                setState(() {
-                  _localSelectedPoint = latLng;
-                  _selectedPin = null;
-                });
-                widget.onPinSelected?.call(latLng);
-              } else {
-                if (_selectedPin != null) setState(() => _selectedPin = null);
-              }
+            onTap: (_, __) {
+              // Dismiss any open report-pin popup on map tap.
+              // Pin placement is handled by the GestureDetector overlay below.
+              if (_selectedPin != null) setState(() => _selectedPin = null);
             },
           ),
           children: <Widget>[
@@ -258,6 +255,27 @@ class _MapScreenState extends State<MapScreen> {
               ),
           ],
         ),
+
+        // Pin-drop overlay — sits above the map but below the controls.
+        // Uses GestureDetector.onTapUp + camera.pointToLatLng for reliable
+        // coordinate conversion regardless of flutter_map gesture state.
+        if (widget.isPinDropMode)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTapUp: (TapUpDetails details) {
+                final Offset local = details.localPosition;
+                final LatLng latLng = _mapController.camera.pointToLatLng(
+                  math.Point(local.dx, local.dy),
+                );
+                setState(() {
+                  _localSelectedPoint = latLng;
+                  _selectedPin = null;
+                });
+                widget.onPinSelected?.call(latLng);
+              },
+            ),
+          ),
 
         // Floating Header (IgnorePointer allows tapping the map through the gradient)
         Positioned(
