@@ -33,9 +33,20 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 .env.local
+# but DO commit shared templates so new contributors / Vercel imports work
+!.env.example
+!.env*.example
 
 # vercel
 .vercel
+
+# local-only artifacts (screenshots, archives, mobile builds) that aren't
+# needed in repo or deploy. Distribute APKs out-of-band (Drive, GH releases).
+*.7z
+*.zip
+*.apk
+*.aab
+LGU\ DASHBOARD.png
 
 # typescript
 *.tsbuildinfo
