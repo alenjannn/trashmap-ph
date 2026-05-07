@@ -34,6 +34,11 @@ class ApiClient {
           'Authorization': 'Bearer $accessToken',
           'Content-Type': 'application/json',
         },
+        // Vercel serverless cold-starts can take 5-10s on first hit.
+        // Generous timeouts prevent false "Connection failed" errors.
+        connectTimeout: const Duration(seconds: 20),
+        sendTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 30),
         validateStatus: (int? s) => s != null && s < 600,
       ),
     );
