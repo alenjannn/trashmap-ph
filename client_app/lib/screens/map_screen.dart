@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -264,9 +263,8 @@ class _MapScreenState extends State<MapScreen> {
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTapUp: (TapUpDetails details) {
-                final Offset local = details.localPosition;
                 final LatLng latLng = _mapController.camera.pointToLatLng(
-                  math.Point(local.dx, local.dy),
+                  details.localPosition,
                 );
                 setState(() {
                   _localSelectedPoint = latLng;
