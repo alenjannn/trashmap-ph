@@ -95,7 +95,7 @@ class _ReportScreenState extends State<ReportScreen> {
         : '${selectedPoint.latitude.toStringAsFixed(6)}, ${selectedPoint.longitude.toStringAsFixed(6)}';
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(20, 100, 20, 140),
+      padding: const EdgeInsets.fromLTRB(20, 100, 20, 120),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
@@ -232,6 +232,7 @@ class _ReportScreenState extends State<ReportScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 20),
         ],
       ),
     );

@@ -63,7 +63,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   }
 
   // Calculate Haversine distance in meters
-  // Re-implementing correctly with math.
   double _calcDist(double lat1, double lon1, double lat2, double lon2) {
     const r = 6371000;
     final dLat = (lat2 - lat1) * (pi / 180);
@@ -84,9 +83,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final Position? position = await _resolvePosition();
 
     try {
-      // Fetch weekly_routes joined with assigned collection points (weekly_route_stops → collection_points)
-      // and zone label. Filter happens client-side: user must be within 150m radius (300m diameter)
-      // of at least one collection point ASSIGNED to that weekly route.
       final dynamic routeResponse = await SupabaseService.client
           .from('weekly_routes')
           .select(
@@ -109,8 +105,6 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
         return;
       }
 
-      // Filter: only keep weekly_routes that have at least one assigned collection point
-      // within _radiusMeters of the citizen's current GPS fix.
       final List<Map<String, dynamic>> filteredRoutes = rawRoutes.where((route) {
         final dynamic stops = route['weekly_route_stops'];
         if (stops is! List) return false;
@@ -182,7 +176,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       displacement: 120,
       color: const Color(0xFF1B4332),
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 100, 20, 140),
+        padding: const EdgeInsets.fromLTRB(20, 100, 20, 120),
         children: <Widget>[
           Padding(
             padding: const EdgeInsets.only(bottom: 16, left: 4),
@@ -295,6 +289,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
               ),
             );
           }),
+          const SizedBox(height: 20),
         ],
       ),
     );

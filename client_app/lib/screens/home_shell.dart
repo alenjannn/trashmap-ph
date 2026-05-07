@@ -108,7 +108,7 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      extendBody: true,
+      extendBody: false,
       // We keep the Stack body for the floating header/notifications
       body: Stack(
         children: [
