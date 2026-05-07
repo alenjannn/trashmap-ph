@@ -29,17 +29,11 @@ class _ReportScreenState extends State<ReportScreen> {
 
   String _normalizedWasteType() {
     switch (_wasteType) {
-      case 'Biodegradable':
-        return 'biodegradable';
-      case 'Recyclable':
-        return 'recyclable';
-      case 'Special/Hazardous':
-        return 'special_hazardous';
-      case 'Mixed':
-        return 'mixed';
-      case 'Unknown':
-      default:
-        return 'unknown';
+      case 'Biodegradable': return 'biodegradable';
+      case 'Recyclable': return 'recyclable';
+      case 'Special/Hazardous': return 'special_hazardous';
+      case 'Mixed': return 'mixed';
+      default: return 'unknown';
     }
   }
 
@@ -47,21 +41,19 @@ class _ReportScreenState extends State<ReportScreen> {
     final LatLng? point = widget.selectedPoint;
     if (point == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No map pin yet. Set pin in Map tab first.')),
+        const SnackBar(content: Text('Please select a location on the map first')),
       );
       return;
     }
 
     if (_descriptionController.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add short description before submit.')),
+        const SnackBar(content: Text('Please provide a short description')),
       );
       return;
     }
 
-    setState(() {
-      _isSubmitting = true;
-    });
+    setState(() => _isSubmitting = true);
 
     try {
       final String? reporterId = SupabaseService.client.auth.currentUser?.id;
@@ -77,35 +69,22 @@ class _ReportScreenState extends State<ReportScreen> {
       if (!mounted) return;
       _descriptionController.clear();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Report submitted. LGU feed updates in realtime.')),
+        const SnackBar(content: Text('Report successfully submitted')),
       );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Submit failed: $error')),
+        SnackBar(content: Text('Submission error: $error')),
       );
     } finally {
-      if (mounted) {
-        setState(() {
-          _isSubmitting = false;
-        });
-      }
+      if (mounted) setState(() => _isSubmitting = false);
     }
-  }
-
-  @override
-  void dispose() {
-    _locationController.dispose();
-    _descriptionController.dispose();
-    super.dispose();
   }
 
   Future<void> _pickImage() async {
     final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
     if (!mounted) return;
-    setState(() {
-      _pickedLabel = image?.name;
-    });
+    setState(() => _pickedLabel = image?.name);
   }
 
   @override
@@ -116,108 +95,141 @@ class _ReportScreenState extends State<ReportScreen> {
         : '${selectedPoint.latitude.toStringAsFixed(6)}, ${selectedPoint.longitude.toStringAsFixed(6)}';
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(20, 100, 20, 140),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Padding(
-            padding: EdgeInsets.fromLTRB(4, 6, 4, 12),
-            child: Text(
-              'Report Garbage Point',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-            ),
-          ),
           SectionCard(
-            title: 'Photo Evidence',
-            subtitle: 'Attach supporting photo (optional)',
+            title: 'Location Point',
+            subtitle: 'Pick coordinates from the map',
+            icon: Icons.location_searching_rounded,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                ElevatedButton.icon(
-                  onPressed: _pickImage,
-                  icon: const Icon(Icons.add_a_photo),
-                  label: const Text('Pick Photo'),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _pickedLabel == null ? 'No photo selected' : 'Selected: $_pickedLabel',
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF4B5563)),
-                ),
-              ],
-            ),
-          ),
-          SectionCard(
-            title: 'Location',
-            subtitle: 'Pin from Map tab used as report coordinates',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
+              children: [
                 TextField(
                   controller: _locationController,
                   readOnly: true,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: 'Tap map to set coordinates',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF1B4332)),
+                  decoration: InputDecoration(
+                    prefixIcon: const Icon(Icons.gps_fixed_rounded, size: 20, color: Color(0xFF40916C)),
+                    fillColor: const Color(0xFFF1F5F9).withOpacity(0.5),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
                   ),
                 ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: widget.onRequestPinTab,
-                  icon: const Icon(Icons.map_outlined),
-                  label: const Text('Go to Map tab to drop pin'),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: widget.onRequestPinTab,
+                    icon: const Icon(Icons.map_rounded, size: 18),
+                    label: const Text('OPEN MAP TO PICK'),
+                    style: OutlinedButton.styleFrom(
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
-          if (selectedPoint != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(6, 2, 6, 10),
-              child: Text(
-                'Pin ready: ${selectedPoint.latitude.toStringAsFixed(6)}, ${selectedPoint.longitude.toStringAsFixed(6)}',
-                style: const TextStyle(
-                  color: Color(0xFF166534),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
+
           SectionCard(
             title: 'Waste Type',
+            subtitle: 'Select category of waste',
+            icon: Icons.auto_awesome_motion_rounded,
             child: DropdownButtonFormField<String>(
-              initialValue: _wasteType,
-              items: const <DropdownMenuItem<String>>[
-                DropdownMenuItem<String>(value: 'Biodegradable', child: Text('Biodegradable')),
-                DropdownMenuItem<String>(value: 'Recyclable', child: Text('Recyclable')),
-                DropdownMenuItem<String>(value: 'Special/Hazardous', child: Text('Special/Hazardous')),
-                DropdownMenuItem<String>(value: 'Mixed', child: Text('Mixed')),
-                DropdownMenuItem<String>(value: 'Unknown', child: Text('Unknown')),
-              ],
-              onChanged: (String? value) {
-                if (value == null) return;
-                setState(() {
-                  _wasteType = value;
-                });
-              },
-              decoration: const InputDecoration(border: OutlineInputBorder()),
-            ),
-          ),
-          SectionCard(
-            title: 'Description (Optional)',
-            child: TextField(
-              controller: _descriptionController,
-              maxLines: 4,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                hintText: 'Add street details, nearest landmark, or urgency notes',
+              value: _wasteType,
+              items: const <String>['Biodegradable', 'Recyclable', 'Special/Hazardous', 'Mixed'].map((String val) {
+                return DropdownMenuItem<String>(
+                  value: val,
+                  child: Text(val, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                );
+              }).toList(),
+              onChanged: (String? value) => value != null ? setState(() => _wasteType = value) : null,
+              decoration: InputDecoration(
+                fillColor: const Color(0xFFF1F5F9).withOpacity(0.5),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          SizedBox(
+
+          SectionCard(
+            title: 'Visual Proof',
+            subtitle: 'Upload area photo',
+            icon: Icons.camera_rounded,
+            child: GestureDetector(
+              onTap: _pickImage,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 20),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9).withOpacity(0.4),
+                  borderRadius: BorderRadius.circular(32),
+                  border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5, style: BorderStyle.solid),
+                ),
+                child: Column(
+                  children: [
+                    Icon(
+                      _pickedLabel == null ? Icons.add_photo_alternate_outlined : Icons.check_circle_rounded,
+                      size: 44,
+                      color: _pickedLabel == null ? const Color(0xFF94A3B8) : const Color(0xFF40916C),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      _pickedLabel ?? 'TAP TO ATTACH PHOTO',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _pickedLabel == null ? const Color(0xFF64748B) : const Color(0xFF1B4332),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          SectionCard(
+            title: 'Notes',
+            subtitle: 'Additional landmarks',
+            icon: Icons.edit_note_rounded,
+            child: TextField(
+              controller: _descriptionController,
+              maxLines: 3,
+              decoration: InputDecoration(
+                hintText: 'Street name, gate color, etc...',
+                fillColor: const Color(0xFFF1F5F9).withOpacity(0.5),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+          
+          Container(
             width: double.infinity,
-            child: FilledButton.icon(
+            height: 64,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(32),
+              gradient: const LinearGradient(colors: [Color(0xFF1B4332), Color(0xFF40916C)]),
+              boxShadow: [
+                BoxShadow(color: const Color(0xFF1B4332).withOpacity(0.3), blurRadius: 20, offset: const Offset(0, 10)),
+              ],
+            ),
+            child: ElevatedButton.icon(
               onPressed: _isSubmitting ? null : _submitReport,
-              icon: const Icon(Icons.send),
-              label: Text(_isSubmitting ? 'Submitting...' : 'Submit Report'),
+              icon: _isSubmitting 
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Icon(Icons.send_rounded, color: Colors.white),
+              label: Text(
+                _isSubmitting ? 'SUBMITTING...' : 'SUBMIT REPORT',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 1),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.transparent,
+                shadowColor: Colors.transparent,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(32)),
+              ),
             ),
           ),
         ],

@@ -1,5 +1,4 @@
 import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:client_app/services/supabase_service.dart';
 import 'package:client_app/widgets/section_card.dart';
@@ -13,8 +12,8 @@ class ScheduleScreen extends StatefulWidget {
 }
 
 class _ScheduleScreenState extends State<ScheduleScreen> {
-  // 1 km diameter = 500 m radius
-  static const double _radiusMeters = 500.0;
+  // 300m diameter = 150m radius
+  static const double _radiusMeters = 150.0;
 
   static const Map<String, int> _dayOrder = <String, int>{
     'monday': 1,
@@ -28,7 +27,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
 
   bool _loading = true;
   String? _error;
-  String? _locationStatus; // shown as subtitle under heading
+  String? _locationStatus; 
   List<Map<String, dynamic>> _schedules = <Map<String, dynamic>>[];
   Position? _position;
 
@@ -38,277 +37,242 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     _loadData();
   }
 
-  // ─── GPS helpers ──────────────────────────────────────────────────────────
-
   Future<Position?> _resolvePosition() async {
     try {
       final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        _locationStatus = 'Location services are off — showing all zones.';
+        _locationStatus = 'GPS Disabled';
         return null;
       }
-
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-      if (permission == LocationPermission.deniedForever ||
-          permission == LocationPermission.denied) {
-        _locationStatus =
-            'Location permission denied — showing all zones.';
+      if (permission == LocationPermission.deniedForever || permission == LocationPermission.denied) {
+        _locationStatus = 'Permission Denied';
         return null;
       }
-
-      final Position pos = await Geolocator.getCurrentPosition(
+      return await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
         timeLimit: const Duration(seconds: 12),
       );
-      _locationStatus =
-          'Showing schedules within 1 km of your location.';
-      return pos;
     } catch (_) {
-      _locationStatus = 'Could not get location — showing all zones.';
+      _locationStatus = 'Location unavailable';
       return null;
     }
   }
 
-  // Haversine distance in metres between two lat/lng points.
-  double _distanceMeters(
-      double lat1, double lng1, double lat2, double lng2) {
-    const double r = 6371000; // Earth radius in metres
+  double _distanceMeters(double lat1, double lng1, double lat2, double lng2) {
+    const double r = 6371000; 
     final double phi1 = lat1 * pi / 180;
     final double phi2 = lat2 * pi / 180;
     final double dPhi = (lat2 - lat1) * pi / 180;
     final double dLambda = (lng2 - lng1) * pi / 180;
-    final double a = sin(dPhi / 2) * sin(dPhi / 2) +
-        cos(phi1) * cos(phi2) * sin(dLambda / 2) * sin(dLambda / 2);
+    final double a = sin(dPhi / 2) * sin(dPhi / 2) + cos(phi1) * cos(phi2) * sin(dLambda / 2) * sin(dLambda / 2);
     return r * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
-
-  // ─── Data fetch ───────────────────────────────────────────────────────────
 
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
-      _locationStatus = null;
     });
 
-    // 1. Get GPS (may be null if permission denied / service off).
     final Position? position = await _resolvePosition();
 
-    // 2. Fetch all active schedules with zone coordinates.
     try {
-      final dynamic response = await SupabaseService.client
+      // 1. Fetch all active schedules with their zones
+      final dynamic scheduleResponse = await SupabaseService.client
           .from('schedules')
-          .select(
-            'id, collection_day, time_window_start, time_window_end, '
-            'zones(id, name, lat, lng)',
-          )
-          .eq('is_active', true)
-          .limit(200);
+          .select('id, collection_day, time_window_start, time_window_end, zone_id, zones(id, name, lat, lng)')
+          .eq('is_active', true);
 
-      List<Map<String, dynamic>> rows =
-          List<Map<String, dynamic>>.from(response as List<dynamic>);
+      final List<Map<String, dynamic>> rawSchedules = List<Map<String, dynamic>>.from(scheduleResponse as List<dynamic>);
 
-      // 3. Filter by GPS distance if we have a position.
-      if (position != null) {
-        rows = rows.where((Map<String, dynamic> row) {
-          final dynamic zone = row['zones'];
-          if (zone is! Map<String, dynamic>) return false;
-          final double? zoneLat = (zone['lat'] as num?)?.toDouble();
-          final double? zoneLng = (zone['lng'] as num?)?.toDouble();
-          if (zoneLat == null || zoneLng == null) return false;
-          final double dist = _distanceMeters(
-              position.latitude, position.longitude, zoneLat, zoneLng);
-          return dist <= _radiusMeters;
-        }).toList();
+      if (position == null) {
+        if (!mounted) return;
+        setState(() {
+          _schedules = [];
+          _loading = false;
+          _locationStatus = 'Need location to find routes';
+        });
+        return;
       }
 
-      // 4. Sort by day of week.
-      rows.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
-        final String dayA =
-            (a['collection_day'] ?? '').toString().toLowerCase();
-        final String dayB =
-            (b['collection_day'] ?? '').toString().toLowerCase();
+      // 2. Fetch all collection points that are assigned to any of these zones
+      final List<String> zoneIds = rawSchedules.map((s) => s['zone_id'].toString()).toSet().toList();
+      final dynamic pointsResponse = await SupabaseService.client
+          .from('collection_points')
+          .select('id, zone_id, lat, lng')
+          .eq('is_active', true)
+          .inFilter('zone_id', zoneIds);
+
+      final List<Map<String, dynamic>> allPoints = List<Map<String, dynamic>>.from(pointsResponse as List<dynamic>);
+
+      // 3. Filter schedules: Only keep those where at least one collection point in its zone is within 150m
+      final List<Map<String, dynamic>> filteredSchedules = rawSchedules.where((schedule) {
+        final String sZoneId = schedule['zone_id'].toString();
+        final zonePoints = allPoints.where((p) => p['zone_id'].toString() == sZoneId);
+        
+        return zonePoints.any((p) {
+          final double pLat = (p['lat'] as num).toDouble();
+          final double pLng = (p['lng'] as num).toDouble();
+          return _distanceMeters(position.latitude, position.longitude, pLat, pLng) <= _radiusMeters;
+        });
+      }).toList();
+
+      filteredSchedules.sort((Map<String, dynamic> a, Map<String, dynamic> b) {
+        final String dayA = (a['collection_day'] ?? '').toString().toLowerCase();
+        final String dayB = (b['collection_day'] ?? '').toString().toLowerCase();
         return (_dayOrder[dayA] ?? 99).compareTo(_dayOrder[dayB] ?? 99);
       });
 
       if (!mounted) return;
       setState(() {
-        _schedules = rows;
+        _schedules = filteredSchedules;
         _position = position;
         _loading = false;
+        _locationStatus = _schedules.isEmpty ? 'No collection points within 300m' : 'Found nearby collection points';
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = 'Unable to load schedule: $error';
+        _error = 'Load failed: $error';
         _loading = false;
       });
     }
   }
 
-  // ─── Formatting helpers ───────────────────────────────────────────────────
-
-  String _dayLabel(String raw) {
-    if (raw.isEmpty) return 'Unknown day';
-    return '${raw[0].toUpperCase()}${raw.substring(1)}';
-  }
+  String _dayLabel(String raw) => raw.isEmpty ? 'Unknown' : '${raw[0].toUpperCase()}${raw.substring(1)}';
 
   bool _isToday(String rawDay) {
-    const List<String> weekdays = <String>[
-      'monday',
-      'tuesday',
-      'wednesday',
-      'thursday',
-      'friday',
-      'saturday',
-      'sunday',
-    ];
+    const List<String> weekdays = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
     return rawDay.toLowerCase() == weekdays[DateTime.now().weekday - 1];
   }
 
   String _formatTime(dynamic raw) {
     final String t = (raw ?? '').toString();
     if (t.isEmpty) return '--:--';
-    // Strip seconds if present (e.g. "06:00:00" → "06:00")
     final List<String> parts = t.split(':');
-    if (parts.length >= 2) return '${parts[0]}:${parts[1]}';
-    return t;
+    return parts.length >= 2 ? '${parts[0]}:${parts[1]}' : t;
   }
-
-  // ─── Build ────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
 
     return RefreshIndicator(
       onRefresh: _loadData,
+      displacement: 120,
+      color: const Color(0xFF1B4332),
       child: ListView(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(20, 100, 20, 140),
         children: <Widget>[
-          // ── Heading ────────────────────────────────────────────────────
-          const Padding(
-            padding: EdgeInsets.fromLTRB(4, 6, 4, 4),
-            child: Text(
-              'Collection Schedule',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16, left: 4),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 10)],
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _position != null ? Icons.location_on_rounded : Icons.location_off_rounded,
+                        size: 14,
+                        color: _position != null ? const Color(0xFF40916C) : const Color(0xFF94A3B8),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _locationStatus ?? 'Detecting...',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: _position != null ? const Color(0xFF40916C) : const Color(0xFF94A3B8),
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
 
-          // ── Location status subtitle ───────────────────────────────────
-          if (_locationStatus != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-              child: Row(
-                children: <Widget>[
-                  Icon(
-                    _position != null
-                        ? Icons.location_on
-                        : Icons.location_off_outlined,
-                    size: 14,
-                    color: _position != null
-                        ? const Color(0xFF16A34A)
-                        : const Color(0xFF6B7280),
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      _locationStatus!,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: _position != null
-                            ? const Color(0xFF16A34A)
-                            : const Color(0xFF6B7280),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-          // ── Error banner ───────────────────────────────────────────────
-          if (_error != null) ...<Widget>[
+          if (_error != null)
             SectionCard(
-              title: 'Schedule load error',
-              child: Text(
-                _error!,
-                style: const TextStyle(color: Color(0xFFB91C1C)),
-              ),
+              title: 'Error',
+              icon: Icons.error_outline_rounded,
+              child: Text(_error!, style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 13)),
             ),
-            const SizedBox(height: 10),
-          ],
 
-          // ── Empty state ────────────────────────────────────────────────
           if (_schedules.isEmpty && _error == null)
             SectionCard(
-              title: _position != null
-                  ? 'No schedules near you'
-                  : 'No active schedule yet',
-              child: Text(
-                _position != null
-                    ? 'No collection routes are scheduled within 1 km of your current location.'
-                    : 'The LGU has not published any collection schedules yet.',
+              title: 'No Routes',
+              subtitle: '300m Diameter Scan',
+              icon: Icons.not_listed_location_rounded,
+              child: const Text(
+                'No collection points found within 300m of your location. Make sure you are at a designated pickup spot.',
+                style: TextStyle(height: 1.6, color: Color(0xFF64748B), fontSize: 13),
               ),
             ),
 
-          // ── Schedule cards ─────────────────────────────────────────────
           ..._schedules.map((Map<String, dynamic> row) {
             final dynamic zone = row['zones'];
-            final String zoneName = zone is Map<String, dynamic>
-                ? (zone['name']?.toString() ?? 'Unknown zone')
-                : 'Unknown zone';
-            final String dayRaw =
-                (row['collection_day'] ?? '').toString();
+            final String zoneName = zone is Map<String, dynamic> ? (zone['name']?.toString() ?? 'Zone') : 'Zone';
+            final String dayRaw = (row['collection_day'] ?? '').toString();
             final bool today = _isToday(dayRaw);
-            final String startTime = _formatTime(row['time_window_start']);
-            final String endTime = _formatTime(row['time_window_end']);
 
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: SectionCard(
-                title: zoneName,
-                subtitle: _dayLabel(dayRaw),
+            return SectionCard(
+              title: zoneName,
+              subtitle: _dayLabel(dayRaw),
+              icon: Icons.local_shipping_rounded,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: today ? const Color(0xFFD8F3DC).withOpacity(0.3) : const Color(0xFFF1F5F9).withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(24),
+                ),
                 child: Row(
-                  children: <Widget>[
-                    if (today)
-                      Container(
-                        margin: const EdgeInsets.only(right: 8),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF16A34A),
-                          borderRadius: BorderRadius.circular(999),
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.schedule_rounded,
+                          size: 18,
+                          color: today ? const Color(0xFF1B4332) : const Color(0xFF64748B),
                         ),
-                        child: const Text(
-                          'Today',
+                        const SizedBox(width: 12),
+                        Text(
+                          '${_formatTime(row['time_window_start'])} – ${_formatTime(row['time_window_end'])}',
                           style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w900,
+                            color: today ? const Color(0xFF1B4332) : const Color(0xFF1E293B),
                           ),
                         ),
-                      ),
-                    Icon(Icons.access_time,
-                        size: 14, color: Colors.grey[600]),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$startTime – $endTime',
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: today
-                            ? const Color(0xFF166534)
-                            : Colors.grey[700],
-                        fontWeight: today
-                            ? FontWeight.w600
-                            : FontWeight.normal,
-                      ),
+                      ],
                     ),
+                    if (today)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1B4332),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'TODAY',
+                          style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900, color: Colors.white, letterSpacing: 1),
+                        ),
+                      ),
                   ],
                 ),
               ),
