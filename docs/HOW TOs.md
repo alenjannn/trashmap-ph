@@ -284,3 +284,73 @@ Physical device: use the dev machine's LAN IP (e.g. `http://192.168.1.42:3000`) 
 - Live truck arrow on map updates while driving.
 - After end-route: route status = `completed_with_issues` (when unresolved) or `completed`. Truck status returns to `idle`.
 - Open **Today's routes** → click route to see the playback modal.
+
+## HOW TO 22: Deploy Web Dashboard to Vercel (GitHub import)
+
+Pre-reqs: repo pushed to GitHub (`alenjannn/trashmap-ph` or your fork), Supabase project healthy, schema applied (HOW TO 9), `.env.local` working locally.
+
+### Step 1 — Import repo
+1. Open [https://vercel.com/new](https://vercel.com/new) → click **Import Git Repository**.
+2. Pick the `trashmap-ph` repo.
+3. **Root Directory** → leave **`./` (`trashmap-ph` root)**. The Next.js app lives at the repo root.
+4. **Application Preset** → Vercel auto-detects **Next.js**. Leave it.
+5. **Build / Output / Install** — leave all toggles off (use defaults). Defaults are correct: `next build`, no custom output dir, `npm install`.
+
+### Step 2 — Environment variables
+Open **Environment Variables** → click **Import .env** and paste your `.env.local` contents (or add each row by hand). Required:
+
+| Variable | Where it comes from |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase Project Settings → API |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase Project Settings → API (anon public) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Project Settings → API (legacy JWT, `eyJ...`, **not** `sb_secret_`) |
+| `ORS_API_KEY` | OpenRouteService dashboard |
+| `OPTIMIZER_CRON_SECRET` | Random — `[guid]::NewGuid().ToString("N")` |
+| `CRON_SECRET` | **Same value** as `OPTIMIZER_CRON_SECRET` (Vercel cron auth header) |
+| `DEMO_SEED_SECRET` | Random |
+| `ROUTE_OPS_SECRET` | Random |
+| `LGU_SUPABASE_AUTH_EMAIL` | Seeded admin email (e.g. `lgu-dashboard@trashmap.ph`) |
+| `LGU_SUPABASE_AUTH_PASSWORD` | Seeded admin password |
+
+Set each for **Production** and **Preview** scopes (default).
+
+### Step 3 — Deploy
+Click **Deploy**. First build ~2 min. When done:
+- Vercel hands you `https://<project>.vercel.app`.
+- Open `/` → admin login gate; sign in with `LGU_SUPABASE_AUTH_*`.
+
+### Step 4 — Supabase auth domain whitelist
+1. Supabase → **Authentication** → **URL Configuration**.
+2. **Site URL** → set to `https://<project>.vercel.app`.
+3. **Redirect URLs** → add `https://<project>.vercel.app/**` and (if you use a Vercel preview URL) `https://*-<team>.vercel.app/**`.
+
+### Step 5 — Mobile app points at production
+Rebuild the Flutter app with the Vercel URL:
+
+```powershell
+& "C:\Users\YOUR_SYSTEM_NAME\.puro\envs\stable\flutter\bin\flutter.bat" run -d emulator-5554 ^
+  --dart-define=SUPABASE_URL="https://YOUR_PROJECT.supabase.co" ^
+  --dart-define=SUPABASE_ANON_KEY="YOUR_ANON_KEY" ^
+  --dart-define=API_BASE_URL="https://<project>.vercel.app"
+```
+
+For release builds, bake the URL into your CI command instead of `.env`.
+
+### Step 6 — Verify cron (optional)
+`vercel.json` schedules a daily optimizer run at `0 18 * * *` UTC (02:00 PHT) hitting `/api/optimize-routes/scheduled`. Vercel auto-sends `Authorization: Bearer ${CRON_SECRET}`. Confirm:
+- Vercel project → **Settings → Cron Jobs** — entry visible.
+- After first run, **Logs** show `triggeredBy: schedule`.
+
+If you don't want cron yet, delete `vercel.json` (the file is opt-in for everything else; Next.js still works without it).
+
+### Step 7 — Common deploy issues
+| Symptom | Fix |
+|---|---|
+| Build OK, every API route 500s | Env vars missing/wrong scope. Re-check Production scope. |
+| `Invalid API key` on first admin load | Used `sb_secret_…` instead of legacy JWT for `SUPABASE_SERVICE_ROLE_KEY`. |
+| `Not signed in` from mobile after switching to Vercel URL | Forgot Step 4 (Supabase redirect whitelist). |
+| Cron returns 401 | `CRON_SECRET` env not set OR not equal to `OPTIMIZER_CRON_SECRET`. |
+| Realtime not updating dashboard in prod | Re-run schema (publication `supabase_realtime` membership) on the same Supabase project Vercel uses. |
+
+### What `.vercelignore` skips
+`client_app/` (Flutter), `docs/`, `supabase/`, screenshots, `.7z`. None of these are needed at runtime; trimming them keeps each deploy upload small. Edit `.vercelignore` if you add a new top-level dir Vercel doesn't need.

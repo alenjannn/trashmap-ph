@@ -2,10 +2,14 @@ import { NextResponse } from "next/server";
 import { runRouteOptimization } from "@/lib/route-optimizer";
 
 function isAuthorized(request: Request): boolean {
-  const cronSecret = process.env.OPTIMIZER_CRON_SECRET;
-  if (!cronSecret) return false;
   const authHeader = request.headers.get("authorization") ?? "";
-  return authHeader === `Bearer ${cronSecret}`;
+  // Accept either the project's own secret or Vercel's standard CRON_SECRET
+  // (Vercel auto-injects this on cron-triggered invocations when the env var is set).
+  const candidates = [process.env.OPTIMIZER_CRON_SECRET, process.env.CRON_SECRET].filter(
+    (s): s is string => Boolean(s),
+  );
+  if (candidates.length === 0) return false;
+  return candidates.some((secret) => authHeader === `Bearer ${secret}`);
 }
 
 export async function POST(request: Request) {

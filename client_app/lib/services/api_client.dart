@@ -3,7 +3,13 @@ import 'package:client_app/services/supabase_service.dart';
 import 'package:dio/dio.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// Next.js app URL (same machine: Android emulator `http://10.0.2.2:3000`, iOS sim `http://127.0.0.1:3000`).
+/// Next.js app URL.
+///
+/// Pass via `--dart-define=API_BASE_URL=...`:
+/// * Android emulator (local dev) → `http://10.0.2.2:3000`
+/// * iOS simulator   (local dev) → `http://127.0.0.1:3000`
+/// * Physical device (local dev) → `http://<dev-machine-LAN-IP>:3000`
+/// * Production              → `https://<your-app>.vercel.app` (no trailing slash)
 class ApiClient {
   ApiClient({String? baseUrl})
       : baseUrl = _resolveBaseUrl(baseUrl);

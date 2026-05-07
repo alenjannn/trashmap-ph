@@ -1,0 +1,26 @@
+# Vercel only deploys the Next.js app at the repo root.
+# Trim the upload to skip directories Vercel can't build or doesn't need.
+
+# Mobile app — Flutter, not deployable on Vercel.
+client_app/
+
+# Documentation, specs, generated PDFs — not needed at runtime.
+docs/
+
+# Database schema — applied via Supabase SQL editor, never by Vercel.
+supabase/
+
+# Project assets that aren't referenced by Next public/.
+LGU\ DASHBOARD.png
+extract\ to\ trashmap\ ph\ folder.7z
+
+# Local-only build outputs.
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+
+# Dotfiles unrelated to deploy.
+AGENTS.md
+CLAUDE.md

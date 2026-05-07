@@ -33,9 +33,17 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 .env.local
+# but DO commit shared templates so new contributors / Vercel imports work
+!.env.example
+!.env*.example
 
 # vercel
 .vercel
+
+# local-only artifacts (screenshots, archives) that aren't needed in repo or deploy
+*.7z
+*.zip
+LGU\ DASHBOARD.png
 
 # typescript
 *.tsbuildinfo
