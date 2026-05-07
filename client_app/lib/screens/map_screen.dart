@@ -149,9 +149,7 @@ class _MapScreenState extends State<MapScreen> {
             initialCenter: _localSelectedPoint ?? qcCenter,
             initialZoom: 14,
             interactionOptions: const InteractionOptions(
-              flags: InteractiveFlag.pinchZoom |
-                  InteractiveFlag.drag |
-                  InteractiveFlag.tap,
+              flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
             ),
             onTap: (_, LatLng latLng) {
               if (widget.isPinDropMode) {
