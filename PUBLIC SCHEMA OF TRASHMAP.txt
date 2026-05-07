@@ -1,0 +1,317 @@
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.admin_access_secrets (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  username text NOT NULL UNIQUE,
+  password_plain text NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT admin_access_secrets_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.app_config (
+  key text NOT NULL,
+  value_json jsonb NOT NULL,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT app_config_pkey PRIMARY KEY (key)
+);
+CREATE TABLE public.app_user_profiles (
+  user_id uuid NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  display_name text,
+  role text NOT NULL DEFAULT 'citizen'::text CHECK (role = ANY (ARRAY['admin'::text, 'citizen'::text, 'driver'::text])),
+  is_authority_confirmed boolean NOT NULL DEFAULT false,
+  driver_verification_status text NOT NULL DEFAULT 'not_submitted'::text CHECK (driver_verification_status = ANY (ARRAY['not_submitted'::text, 'pending'::text, 'approved'::text, 'rejected'::text])),
+  CONSTRAINT app_user_profiles_pkey PRIMARY KEY (user_id),
+  CONSTRAINT app_user_profiles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.citizen_zone_subscriptions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  user_id uuid NOT NULL,
+  zone_id uuid NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  CONSTRAINT citizen_zone_subscriptions_pkey PRIMARY KEY (id),
+  CONSTRAINT citizen_zone_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT citizen_zone_subscriptions_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id)
+);
+CREATE TABLE public.collection_points (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  label text NOT NULL,
+  lat double precision NOT NULL,
+  lng double precision NOT NULL,
+  location USER-DEFINED DEFAULT (st_setsrid(st_makepoint(lng, lat), 4326))::geography,
+  zone_id uuid,
+  is_active boolean NOT NULL DEFAULT true,
+  added_by uuid,
+  CONSTRAINT collection_points_pkey PRIMARY KEY (id),
+  CONSTRAINT collection_points_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id),
+  CONSTRAINT collection_points_added_by_fkey FOREIGN KEY (added_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.gamification_points (
+  user_id uuid NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  points integer NOT NULL DEFAULT 0 CHECK (points >= 0),
+  badges jsonb NOT NULL DEFAULT '[]'::jsonb,
+  barangay text DEFAULT 'Unassigned'::text,
+  CONSTRAINT gamification_points_pkey PRIMARY KEY (user_id),
+  CONSTRAINT gamification_points_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.hotspots (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  zone_id uuid,
+  center_lat double precision NOT NULL,
+  center_lng double precision NOT NULL,
+  center_location USER-DEFINED DEFAULT (st_setsrid(st_makepoint(center_lng, center_lat), 4326))::geography,
+  radius_meters integer NOT NULL DEFAULT 50 CHECK (radius_meters > 0),
+  unique_reporters_count integer NOT NULL DEFAULT 0 CHECK (unique_reporters_count >= 0),
+  status text NOT NULL DEFAULT 'active'::text CHECK (status = ANY (ARRAY['active'::text, 'cleared'::text])),
+  severity text NOT NULL DEFAULT 'medium'::text CHECK (severity = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'critical'::text])),
+  CONSTRAINT hotspots_pkey PRIMARY KEY (id),
+  CONSTRAINT hotspots_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id)
+);
+CREATE TABLE public.recyclers (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  name text NOT NULL,
+  lat double precision NOT NULL,
+  lng double precision NOT NULL,
+  location USER-DEFINED DEFAULT (st_setsrid(st_makepoint(lng, lat), 4326))::geography,
+  address text,
+  contact_number text,
+  accepted_materials ARRAY NOT NULL DEFAULT '{}'::text[],
+  operating_hours text,
+  approval_status text NOT NULL DEFAULT 'approved'::text CHECK (approval_status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])),
+  CONSTRAINT recyclers_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.report_verifications (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  report_id uuid NOT NULL,
+  before_photo_url text NOT NULL,
+  after_photo_url text NOT NULL,
+  verified_by uuid,
+  verified_at timestamp with time zone NOT NULL DEFAULT now(),
+  notes text,
+  CONSTRAINT report_verifications_pkey PRIMARY KEY (id),
+  CONSTRAINT report_verifications_report_id_fkey FOREIGN KEY (report_id) REFERENCES public.reports(id),
+  CONSTRAINT report_verifications_verified_by_fkey FOREIGN KEY (verified_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.reports (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  reporter_id uuid,
+  lat double precision NOT NULL,
+  lng double precision NOT NULL,
+  location USER-DEFINED DEFAULT (st_setsrid(st_makepoint(lng, lat), 4326))::geography,
+  report_type text NOT NULL DEFAULT 'dumpsite'::text CHECK (report_type = ANY (ARRAY['dumpsite'::text, 'missed_pickup'::text])),
+  waste_type text NOT NULL DEFAULT 'unknown'::text CHECK (waste_type = ANY (ARRAY['biodegradable'::text, 'recyclable'::text, 'special_hazardous'::text, 'mixed'::text, 'unknown'::text])),
+  photo_url text,
+  description text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'acknowledged'::text, 'dispatched'::text, 'resolved'::text, 'rejected'::text])),
+  zone_id uuid,
+  updated_by uuid,
+  CONSTRAINT reports_pkey PRIMARY KEY (id),
+  CONSTRAINT reports_reporter_id_fkey FOREIGN KEY (reporter_id) REFERENCES auth.users(id),
+  CONSTRAINT reports_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id),
+  CONSTRAINT reports_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.risk_zones (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  zone_id uuid,
+  name text NOT NULL,
+  center_lat double precision NOT NULL,
+  center_lng double precision NOT NULL,
+  center_location USER-DEFINED DEFAULT (st_setsrid(st_makepoint(center_lng, center_lat), 4326))::geography,
+  score numeric NOT NULL CHECK (score >= 0::numeric AND score <= 1::numeric),
+  level text NOT NULL CHECK (level = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'critical'::text])),
+  radius_meters integer,
+  CONSTRAINT risk_zones_pkey PRIMARY KEY (id),
+  CONSTRAINT risk_zones_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id)
+);
+CREATE TABLE public.route_assignments (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  route_id uuid NOT NULL,
+  driver_id uuid NOT NULL,
+  assigned_by uuid,
+  assigned_at timestamp with time zone NOT NULL DEFAULT now(),
+  mode text NOT NULL DEFAULT 'manual'::text CHECK (mode = ANY (ARRAY['manual'::text, 'auto'::text])),
+  is_active boolean NOT NULL DEFAULT true,
+  CONSTRAINT route_assignments_pkey PRIMARY KEY (id),
+  CONSTRAINT route_assignments_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.routes(id),
+  CONSTRAINT route_assignments_driver_id_fkey FOREIGN KEY (driver_id) REFERENCES auth.users(id),
+  CONSTRAINT route_assignments_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.route_audit_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  route_id uuid NOT NULL,
+  stop_id uuid,
+  event_type text NOT NULL CHECK (event_type = ANY (ARRAY['route_started'::text, 'truck_arriving'::text, 'stop_completed'::text, 'route_completed'::text, 'exception'::text])),
+  actor_user_id uuid,
+  actor_role text NOT NULL CHECK (actor_role = ANY (ARRAY['admin'::text, 'driver'::text, 'system'::text])),
+  zone_id uuid,
+  area_label text,
+  event_time timestamp with time zone NOT NULL DEFAULT now(),
+  metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT route_audit_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT route_audit_logs_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.routes(id),
+  CONSTRAINT route_audit_logs_stop_id_fkey FOREIGN KEY (stop_id) REFERENCES public.route_stops(id),
+  CONSTRAINT route_audit_logs_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES auth.users(id),
+  CONSTRAINT route_audit_logs_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id)
+);
+CREATE TABLE public.route_notifications_log (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  route_id uuid NOT NULL,
+  zone_id uuid,
+  event_type text NOT NULL CHECK (event_type = ANY (ARRAY['route_started'::text, 'truck_arriving'::text, 'route_completed'::text, 'exception'::text])),
+  target_scope text NOT NULL CHECK (target_scope = ANY (ARRAY['admin'::text, 'citizen_zone'::text, 'both'::text])),
+  title text NOT NULL,
+  body text NOT NULL,
+  metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT route_notifications_log_pkey PRIMARY KEY (id),
+  CONSTRAINT route_notifications_log_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.routes(id),
+  CONSTRAINT route_notifications_log_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id)
+);
+CREATE TABLE public.route_progress (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  route_id uuid NOT NULL,
+  stop_id uuid,
+  truck_id uuid NOT NULL,
+  driver_id uuid,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'arrived'::text, 'completed'::text, 'skipped'::text, 'missed'::text])),
+  confirmed_at timestamp with time zone,
+  notes text,
+  CONSTRAINT route_progress_pkey PRIMARY KEY (id),
+  CONSTRAINT route_progress_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.routes(id),
+  CONSTRAINT route_progress_stop_id_fkey FOREIGN KEY (stop_id) REFERENCES public.route_stops(id),
+  CONSTRAINT route_progress_truck_id_fkey FOREIGN KEY (truck_id) REFERENCES public.trucks(id),
+  CONSTRAINT route_progress_driver_id_fkey FOREIGN KEY (driver_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.route_stops (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  route_id uuid NOT NULL,
+  stop_order integer NOT NULL CHECK (stop_order > 0),
+  label text NOT NULL,
+  lat double precision NOT NULL,
+  lng double precision NOT NULL,
+  location USER-DEFINED DEFAULT (st_setsrid(st_makepoint(lng, lat), 4326))::geography,
+  stop_type text NOT NULL DEFAULT 'pickup'::text CHECK (stop_type = ANY (ARRAY['pickup'::text, 'transfer'::text, 'disposal'::text, 'other'::text])),
+  eta timestamp with time zone,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'arrived'::text, 'completed'::text, 'skipped'::text, 'missed'::text])),
+  CONSTRAINT route_stops_pkey PRIMARY KEY (id),
+  CONSTRAINT route_stops_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.routes(id)
+);
+CREATE TABLE public.routes (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  route_date date NOT NULL,
+  truck_id uuid NOT NULL,
+  zone_id uuid,
+  status text NOT NULL DEFAULT 'draft'::text CHECK (status = ANY (ARRAY['draft'::text, 'published'::text, 'scheduled'::text, 'in_progress'::text, 'completed'::text, 'completed_with_issues'::text, 'cancelled'::text])),
+  source text NOT NULL DEFAULT 'manual'::text CHECK (source = ANY (ARRAY['manual'::text, 'ai_optimized'::text])),
+  estimated_distance_km numeric CHECK (estimated_distance_km >= 0::numeric),
+  estimated_duration_minutes integer CHECK (estimated_duration_minutes >= 0),
+  estimated_fuel_liters numeric CHECK (estimated_fuel_liters >= 0::numeric),
+  polyline text,
+  weekly_route_id uuid,
+  CONSTRAINT routes_pkey PRIMARY KEY (id),
+  CONSTRAINT routes_truck_id_fkey FOREIGN KEY (truck_id) REFERENCES public.trucks(id),
+  CONSTRAINT routes_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id),
+  CONSTRAINT routes_template_id_fkey FOREIGN KEY (weekly_route_id) REFERENCES public.weekly_routes(id)
+);
+CREATE TABLE public.spatial_ref_sys (
+  srid integer NOT NULL CHECK (srid > 0 AND srid <= 998999),
+  auth_name character varying,
+  auth_srid integer,
+  srtext character varying,
+  proj4text character varying,
+  CONSTRAINT spatial_ref_sys_pkey PRIMARY KEY (srid)
+);
+CREATE TABLE public.truck_pings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  route_id uuid NOT NULL,
+  truck_id uuid NOT NULL,
+  driver_id uuid,
+  lat double precision NOT NULL,
+  lng double precision NOT NULL,
+  speed_kmh numeric,
+  heading numeric,
+  recorded_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT truck_pings_pkey PRIMARY KEY (id),
+  CONSTRAINT truck_pings_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.routes(id),
+  CONSTRAINT truck_pings_truck_id_fkey FOREIGN KEY (truck_id) REFERENCES public.trucks(id),
+  CONSTRAINT truck_pings_driver_id_fkey FOREIGN KEY (driver_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.trucks (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  truck_code text NOT NULL UNIQUE,
+  plate_number text UNIQUE,
+  driver_name text,
+  capacity_kg numeric CHECK (capacity_kg >= 0::numeric),
+  status text NOT NULL DEFAULT 'idle'::text CHECK (status = ANY (ARRAY['idle'::text, 'en_route'::text, 'collecting'::text, 'maintenance'::text, 'offline'::text])),
+  CONSTRAINT trucks_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.weekly_route_assignments (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  weekly_route_id uuid NOT NULL,
+  driver_id uuid NOT NULL,
+  assigned_by uuid,
+  assigned_at timestamp with time zone NOT NULL DEFAULT now(),
+  unassigned_at timestamp with time zone,
+  is_active boolean NOT NULL DEFAULT true,
+  CONSTRAINT weekly_route_assignments_pkey PRIMARY KEY (id),
+  CONSTRAINT route_template_assignments_template_id_fkey FOREIGN KEY (weekly_route_id) REFERENCES public.weekly_routes(id),
+  CONSTRAINT route_template_assignments_driver_id_fkey FOREIGN KEY (driver_id) REFERENCES auth.users(id),
+  CONSTRAINT route_template_assignments_assigned_by_fkey FOREIGN KEY (assigned_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.weekly_route_stops (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  weekly_route_id uuid NOT NULL,
+  collection_point_id uuid NOT NULL,
+  stop_order integer NOT NULL CHECK (stop_order > 0),
+  CONSTRAINT weekly_route_stops_pkey PRIMARY KEY (id),
+  CONSTRAINT route_template_stops_template_id_fkey FOREIGN KEY (weekly_route_id) REFERENCES public.weekly_routes(id),
+  CONSTRAINT route_template_stops_collection_point_id_fkey FOREIGN KEY (collection_point_id) REFERENCES public.collection_points(id)
+);
+CREATE TABLE public.weekly_routes (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  name text NOT NULL,
+  zone_id uuid NOT NULL,
+  recurrence_day text NOT NULL CHECK (recurrence_day = ANY (ARRAY['monday'::text, 'tuesday'::text, 'wednesday'::text, 'thursday'::text, 'friday'::text, 'saturday'::text, 'sunday'::text])),
+  is_active boolean NOT NULL DEFAULT true,
+  created_by uuid,
+  start_hour smallint NOT NULL DEFAULT 6 CHECK (start_hour >= 0 AND start_hour <= 23),
+  end_hour smallint NOT NULL DEFAULT 12 CHECK (end_hour >= 1 AND end_hour <= 24),
+  time_window_start time without time zone NOT NULL DEFAULT '06:00:00'::time without time zone,
+  time_window_end time without time zone NOT NULL DEFAULT '09:00:00'::time without time zone,
+  CONSTRAINT weekly_routes_pkey PRIMARY KEY (id),
+  CONSTRAINT route_templates_zone_id_fkey FOREIGN KEY (zone_id) REFERENCES public.zones(id),
+  CONSTRAINT route_templates_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id)
+);
+CREATE TABLE public.zones (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL UNIQUE,
+  lat double precision NOT NULL,
+  lng double precision NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT zones_pkey PRIMARY KEY (id)
+);
