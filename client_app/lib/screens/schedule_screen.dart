@@ -84,7 +84,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     final Position? position = await _resolvePosition();
 
     try {
-      // Fetch weekly_routes joined with assigned collection points (route_template_stops → collection_points)
+      // Fetch weekly_routes joined with assigned collection points (weekly_route_stops → collection_points)
       // and zone label. Filter happens client-side: user must be within 150m radius (300m diameter)
       // of at least one collection point ASSIGNED to that weekly route.
       final dynamic routeResponse = await SupabaseService.client
@@ -92,7 +92,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           .select(
             'id, name, recurrence_day, start_hour, end_hour, zone_id, '
             'zones(id, name), '
-            'route_template_stops(collection_points(id, lat, lng, is_active))',
+            'weekly_route_stops(collection_points(id, lat, lng, is_active))',
           )
           .eq('is_active', true);
 
@@ -112,7 +112,7 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       // Filter: only keep weekly_routes that have at least one assigned collection point
       // within _radiusMeters of the citizen's current GPS fix.
       final List<Map<String, dynamic>> filteredRoutes = rawRoutes.where((route) {
-        final dynamic stops = route['route_template_stops'];
+        final dynamic stops = route['weekly_route_stops'];
         if (stops is! List) return false;
         for (final dynamic stop in stops) {
           final dynamic cp = stop is Map<String, dynamic> ? stop['collection_points'] : null;

@@ -29,7 +29,7 @@ type TemplateRow = {
   name: string;
   zone_id: string;
   is_active: boolean;
-  route_template_stops: TemplateStopRow[];
+  weekly_route_stops: TemplateStopRow[];
 };
 
 type InsertedRouteRow = {
@@ -119,7 +119,7 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
   const { data: templateRows, error: templatesError } = await supabase
     .from("weekly_routes")
     .select(
-      "id, name, zone_id, is_active, route_template_stops(stop_order, collection_points(id, label, lat, lng))",
+      "id, name, zone_id, is_active, weekly_route_stops(stop_order, collection_points(id, label, lat, lng))",
     )
     .eq("is_active", true)
     .order("created_at", { ascending: true });
@@ -133,7 +133,7 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
   const usableTemplates = templates
     .map((t) => ({
       ...t,
-      stops: (t.route_template_stops ?? [])
+      stops: (t.weekly_route_stops ?? [])
         .filter((s) => s.collection_points !== null)
         .sort((a, b) => a.stop_order - b.stop_order)
         .map((s) => ({

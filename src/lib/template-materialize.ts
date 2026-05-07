@@ -50,9 +50,9 @@ export async function materializeTemplateForDate(
   }
 
   const { data: stops, error: stopsError } = await supabase
-    .from("route_template_stops")
+    .from("weekly_route_stops")
     .select("stop_order, collection_point_id, collection_points(label, lat, lng)")
-    .eq("template_id", templateId)
+    .eq("weekly_route_id", templateId)
     .order("stop_order", { ascending: true });
   if (stopsError || !stops || stops.length === 0) {
     return { ok: false, status: 400, message: "No stops in template." };

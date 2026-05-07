@@ -33,9 +33,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const force = body.force === true;
 
     const { data: tplAssignment, error: taError } = await supabase
-      .from("route_template_assignments")
+      .from("weekly_route_assignments")
       .select("id")
-      .eq("template_id", templateId)
+      .eq("weekly_route_id", templateId)
       .eq("driver_id", userId)
       .eq("is_active", true)
       .maybeSingle();

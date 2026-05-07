@@ -24,9 +24,9 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     }
 
     const { data: rows, error } = await supabase
-      .from("route_template_assignments")
+      .from("weekly_route_assignments")
       .select("id, driver_id, assigned_at")
-      .eq("template_id", templateId)
+      .eq("weekly_route_id", templateId)
       .eq("is_active", true)
       .order("assigned_at", { ascending: true });
     if (error) {
@@ -82,9 +82,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     const { data: existing } = await supabase
-      .from("route_template_assignments")
+      .from("weekly_route_assignments")
       .select("id")
-      .eq("template_id", templateId)
+      .eq("weekly_route_id", templateId)
       .eq("driver_id", driverId)
       .eq("is_active", true)
       .maybeSingle();
@@ -99,9 +99,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
 
     const { data: inserted, error: insertError } = await supabase
-      .from("route_template_assignments")
+      .from("weekly_route_assignments")
       .insert({
-        template_id: templateId,
+        weekly_route_id: templateId,
         driver_id: driverId,
         is_active: true,
       })

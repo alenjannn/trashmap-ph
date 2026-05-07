@@ -37,9 +37,9 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     //    were inserted). Match by stop coordinates instead — same trick as the
     //    collection_points DELETE handler.
     const { data: tplStops, error: tplStopsError } = await supabase
-      .from("route_template_stops")
+      .from("weekly_route_stops")
       .select("collection_points(lat, lng)")
-      .eq("template_id", id);
+      .eq("weekly_route_id", id);
     if (tplStopsError) {
       return NextResponse.json({ ok: false, message: tplStopsError.message }, { status: 500 });
     }

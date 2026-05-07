@@ -74,9 +74,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, message: `Failed to create route template: ${templateError.message}` }, { status: 500 });
     }
 
-    const { error: stopError } = await supabase.from("route_template_stops").insert(
+    const { error: stopError } = await supabase.from("weekly_route_stops").insert(
       stops.map((stop) => ({
-        template_id: template.id as string,
+        weekly_route_id: template.id as string,
         collection_point_id: stop.collectionPointId,
         stop_order: stop.stopOrder,
       })),
