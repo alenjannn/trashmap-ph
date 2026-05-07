@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:client_app/screens/directory_screen.dart';
 import 'package:client_app/screens/map_screen.dart';
 import 'package:client_app/screens/report_screen.dart';
-import 'package:client_app/screens/rewards_screen.dart';
 import 'package:client_app/screens/schedule_screen.dart';
 import 'package:client_app/services/supabase_service.dart';
 import 'package:latlong2/latlong.dart';
@@ -103,27 +101,6 @@ class _HomeShellState extends State<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final Widget activeScreen = <Widget>[
-      MapScreen(
-        selectedPoint: _selectedReportPoint,
-        onPinSelected: (LatLng point) {
-          setState(() {
-            _selectedReportPoint = point;
-          });
-        },
-      ),
-      ReportScreen(
-        selectedPoint: _selectedReportPoint,
-        onRequestPinTab: () {
-          setState(() {
-            _selectedIndex = 0;
-          });
-        },
-      ),
-      const ScheduleScreen(),
-      const DirectoryScreen(),
-      const RewardsScreen(),
-    ][_selectedIndex];
 
     return Scaffold(
       appBar: AppBar(
@@ -181,7 +158,30 @@ class _HomeShellState extends State<HomeShell> {
                     .toList(),
               ),
             ),
-          Expanded(child: activeScreen),
+          Expanded(
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: <Widget>[
+                MapScreen(
+                  selectedPoint: _selectedReportPoint,
+                  onPinSelected: (LatLng point) {
+                    setState(() {
+                      _selectedReportPoint = point;
+                    });
+                  },
+                ),
+                ReportScreen(
+                  selectedPoint: _selectedReportPoint,
+                  onRequestPinTab: () {
+                    setState(() {
+                      _selectedIndex = 0;
+                    });
+                  },
+                ),
+                const ScheduleScreen(),
+              ],
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -202,16 +202,6 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.schedule_outlined),
             selectedIcon: Icon(Icons.schedule),
             label: 'Schedule',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.storefront_outlined),
-            selectedIcon: Icon(Icons.storefront),
-            label: 'Directory',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.emoji_events_outlined),
-            selectedIcon: Icon(Icons.emoji_events),
-            label: 'Rewards',
           ),
         ],
       ),
