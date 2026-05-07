@@ -28,7 +28,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ id: 
     const { data: directRoutes, error: directLookupError } = await supabase
       .from("routes")
       .select("id")
-      .eq("template_id", id);
+      .eq("weekly_route_id", id);
     if (directLookupError) {
       return NextResponse.json({ ok: false, message: directLookupError.message }, { status: 500 });
     }

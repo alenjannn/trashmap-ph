@@ -13,7 +13,7 @@ export async function GET(request: Request, context: { params: Promise<{ routeId
     const { data: route, error: routeError } = await supabase
       .from("routes")
       .select(
-        "id, created_at, route_date, truck_id, zone_id, status, source, estimated_distance_km, estimated_duration_minutes, estimated_fuel_liters, polyline, template_id",
+        "id, created_at, route_date, truck_id, zone_id, status, source, estimated_distance_km, estimated_duration_minutes, estimated_fuel_liters, polyline, weekly_route_id",
       )
       .eq("id", routeId)
       .maybeSingle();

@@ -193,10 +193,10 @@ export function RouteReportModal({ routeId, opsToken, onClose }: RouteReportModa
                     ? String(driverProfile.display_name ?? driverProfile.user_id ?? "—")
                     : "—"}
                 </p>
-                {route?.template_id ? (
+                {route?.weekly_route_id ? (
                   <p className="mt-1">
                     <span className="font-semibold text-zinc-600">Template: </span>
-                    {String(route.template_id).slice(0, 8)}…
+                    {String(route.weekly_route_id).slice(0, 8)}…
                   </p>
                 ) : null}
               </div>

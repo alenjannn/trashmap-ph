@@ -207,7 +207,7 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
           route_date: routeDate,
           truck_id: truck.id,
           zone_id: template.zone_id,
-          template_id: template.id,
+          weekly_route_id: template.id,
           status: "published" as const,
           source: "ai_optimized" as const,
           estimated_distance_km: distanceKm,

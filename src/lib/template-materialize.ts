@@ -67,7 +67,7 @@ export async function materializeTemplateForDate(
   const { data: existingRoute } = await supabase
     .from("routes")
     .select("id, polyline, estimated_distance_km, estimated_duration_minutes, source")
-    .eq("template_id", templateId)
+    .eq("weekly_route_id", templateId)
     .eq("route_date", routeDate)
     .limit(1)
     .maybeSingle();
@@ -141,7 +141,7 @@ export async function materializeTemplateForDate(
       route_date: routeDate,
       truck_id: idleTruck.id,
       zone_id: template.zone_id,
-      template_id: templateId,
+      weekly_route_id: templateId,
       status: "published",
       source: "manual",
       estimated_distance_km: geometry.distanceKm,

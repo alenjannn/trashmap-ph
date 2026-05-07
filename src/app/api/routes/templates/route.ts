@@ -67,6 +67,9 @@ export async function POST(request: Request) {
         created_by: body.createdBy ?? null,
         start_hour: startHour,
         end_hour: endHour,
+        // Keep time_window_start/end in sync with start_hour/end_hour for mobile app compatibility.
+        time_window_start: `${String(startHour).padStart(2, "0")}:00:00`,
+        time_window_end: `${String(endHour).padStart(2, "0")}:00:00`,
       })
       .select("id, zone_id")
       .single();
