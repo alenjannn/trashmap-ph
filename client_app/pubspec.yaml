@@ -52,6 +52,15 @@ dependencies:
   # HTTP requests
   dio: ^5.4.0
 
+  # Offline queue (telemetry) — Phase 6; declared in Phase 5 per plan
+  connectivity_plus: ^6.0.5
+
+  # Manila timezone for route window gate (matches server route-gate.ts)
+  timezone: ^0.9.4
+
+  # Phase 6 — keep screen on during turn-by-turn navigation
+  wakelock_plus: ^1.2.5
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

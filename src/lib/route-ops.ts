@@ -12,11 +12,40 @@ type RouteRow = {
 };
 
 export function isRouteOpsAuthorized(request: Request): boolean {
-  const token =
-    process.env.ROUTE_OPS_SECRET ?? process.env.OPTIMIZER_CRON_SECRET ?? process.env.DEMO_SEED_SECRET ?? "";
+  const token = (
+    process.env.ROUTE_OPS_SECRET ??
+    process.env.OPTIMIZER_CRON_SECRET ??
+    process.env.DEMO_SEED_SECRET ??
+    ""
+  ).trim();
   if (!token) return false;
-  const authHeader = request.headers.get("authorization") ?? "";
-  return authHeader === `Bearer ${token}`;
+  const authHeader = (request.headers.get("authorization") ?? "").trim();
+  const match = /^Bearer\s+(\S+)/i.exec(authHeader);
+  const provided = (match?.[1] ?? "").trim();
+  return provided.length > 0 && provided === token;
+}
+
+/** Resolve Supabase auth user id from `Authorization: Bearer <jwt>`. */
+export async function getBearerUserId(request: Request): Promise<string | null> {
+  const authHeader = (request.headers.get("authorization") ?? "").trim();
+  const match = /^Bearer\s+(\S+)/i.exec(authHeader);
+  if (!match?.[1]) return null;
+  const jwt = match[1];
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) return null;
+  const client = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+  });
+  const { data, error } = await client.auth.getUser();
+  if (error || !data.user) return null;
+  return data.user.id;
+}
+
+export async function getProfileRole(supabase: SupabaseClient, userId: string): Promise<string | null> {
+  const { data, error } = await supabase.from("app_user_profiles").select("role").eq("user_id", userId).maybeSingle();
+  if (error || !data) return null;
+  return data.role as string;
 }
 
 export function getServiceSupabase(): SupabaseClient {
@@ -174,7 +203,7 @@ export async function upsertRouteProgress(
   payload: {
     routeId: string;
     stopId: string;
-    status: "completed" | "skipped";
+    status: "completed" | "skipped" | "missed";
     driverId?: string | null;
     notes?: string | null;
   },

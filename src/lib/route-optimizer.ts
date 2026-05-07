@@ -9,29 +9,27 @@ type TruckSeed = {
   status: "idle" | "en_route" | "collecting" | "maintenance" | "offline";
 };
 
-type StopSeed = {
-  label: string;
-  lat: number;
-  lng: number;
-  stopType: "pickup" | "transfer" | "disposal" | "other";
-  weight: number;
-};
-
 type TruckRow = {
   id: string;
   truck_code: string;
 };
 
-type CollectionPointRow = {
-  label: string;
-  lat: number;
-  lng: number;
+type TemplateStopRow = {
+  stop_order: number;
+  collection_points: {
+    id: string;
+    label: string;
+    lat: number;
+    lng: number;
+  } | null;
 };
 
-type HotspotRow = {
-  center_lat: number;
-  center_lng: number;
-  severity: "low" | "medium" | "high" | "critical";
+type TemplateRow = {
+  id: string;
+  name: string;
+  zone_id: string;
+  is_active: boolean;
+  route_template_stops: TemplateStopRow[];
 };
 
 type InsertedRouteRow = {
@@ -43,7 +41,7 @@ type InsertedRouteRow = {
   polyline: string | null;
 };
 
-type OptimizationMode = "mock" | "ors";
+type OptimizationMode = "mock" | "ors" | "osrm";
 
 type RunOptions = {
   forceMode?: OptimizationMode;
@@ -60,62 +58,34 @@ type OptimizeResult = {
   };
   routes: InsertedRouteRow[];
   warning?: string;
+  message?: string;
 };
 
-const DEFAULT_STOPS: StopSeed[] = [
-  { label: "Brentwood Gate North", lat: 14.69032, lng: 121.10623, stopType: "pickup", weight: 3 },
-  { label: "Brentwood Inner Loop A", lat: 14.68991, lng: 121.10687, stopType: "pickup", weight: 2 },
-  { label: "Brentwood Inner Loop B", lat: 14.68952, lng: 121.10748, stopType: "pickup", weight: 2 },
-  { label: "Brentwood East Row", lat: 14.68905, lng: 121.10793, stopType: "pickup", weight: 2 },
-  { label: "Brentwood Mid Court", lat: 14.68876, lng: 121.10719, stopType: "pickup", weight: 2 },
-  { label: "Brentwood South Pocket", lat: 14.68834, lng: 121.10682, stopType: "pickup", weight: 2 },
-  { label: "Brentwood Lower West", lat: 14.68805, lng: 121.10608, stopType: "pickup", weight: 2 },
-  { label: "Brentwood Exit South", lat: 14.68772, lng: 121.10559, stopType: "pickup", weight: 1 },
-];
-
 const TRUCKS: TruckSeed[] = [
-  {
-    truck_code: "TRK-01",
-    plate_number: "NAA-1001",
-    driver_name: "Driver One",
-    capacity_kg: 2500,
-    status: "idle",
-  },
-  {
-    truck_code: "TRK-02",
-    plate_number: "NAA-1002",
-    driver_name: "Driver Two",
-    capacity_kg: 2800,
-    status: "idle",
-  },
-  {
-    truck_code: "TRK-03",
-    plate_number: "NAA-1003",
-    driver_name: "Driver Three",
-    capacity_kg: 3000,
-    status: "idle",
-  },
+  { truck_code: "TRK-01", plate_number: "NAA-1001", driver_name: "Driver One", capacity_kg: 2500, status: "idle" },
+  { truck_code: "TRK-02", plate_number: "NAA-1002", driver_name: "Driver Two", capacity_kg: 2800, status: "idle" },
+  { truck_code: "TRK-03", plate_number: "NAA-1003", driver_name: "Driver Three", capacity_kg: 3000, status: "idle" },
 ];
 
 function isoDateToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function makePolyline(stops: StopSeed[]): string {
-  return stops.map((stop) => `${stop.lat.toFixed(6)},${stop.lng.toFixed(6)}`).join(";");
+function straightLinePolyline(stops: Array<{ lat: number; lng: number }>): string {
+  return stops.map((s) => `${s.lat.toFixed(6)},${s.lng.toFixed(6)}`).join(";");
 }
 
-function estimateDistanceKm(stops: StopSeed[]): number {
-  const weight = stops.reduce((total, stop) => total + stop.weight, 0);
-  return Number((stops.length * 1.35 + weight * 0.55).toFixed(2));
-}
-
-function splitStopsIntoBuckets(stops: StopSeed[], bucketCount: number): StopSeed[][] {
-  const buckets: StopSeed[][] = Array.from({ length: bucketCount }, () => []);
-  stops.forEach((stop, index) => {
-    buckets[index % bucketCount].push(stop);
-  });
-  return buckets;
+function estimateDistanceKm(stops: Array<{ lat: number; lng: number }>): number {
+  if (stops.length < 2) return 0.5;
+  let dist = 0;
+  for (let i = 1; i < stops.length; i++) {
+    const a = stops[i - 1];
+    const b = stops[i];
+    const dLat = (b.lat - a.lat) * 111;
+    const dLng = (b.lng - a.lng) * 111 * Math.cos((a.lat * Math.PI) / 180);
+    dist += Math.sqrt(dLat * dLat + dLng * dLng);
+  }
+  return Number(dist.toFixed(2));
 }
 
 function getSupabaseServerClient() {
@@ -129,18 +99,13 @@ function getSupabaseServerClient() {
   return createClient(supabaseUrl, serviceRoleKey);
 }
 
-function pickTruckCount(stopCount: number, maxTrucks: number): number {
-  if (stopCount <= 10) return Math.min(1, maxTrucks);
-  if (stopCount <= 22) return Math.min(2, maxTrucks);
-  return Math.min(3, maxTrucks);
-}
-
 export async function runRouteOptimization(options?: RunOptions): Promise<OptimizeResult> {
   const supabase = getSupabaseServerClient();
   const routeDate = isoDateToday();
-  const orsKey = process.env.ORS_API_KEY;
+  const orsKey = process.env.ORS_API_KEY ?? "";
   const preferORS = options?.forceMode ? options.forceMode === "ors" : Boolean(orsKey);
 
+  // Ensure trucks exist (idempotent seed) and pick from existing pool.
   const { data: truckRows, error: truckUpsertError } = await supabase
     .from("trucks")
     .upsert(TRUCKS, { onConflict: "truck_code" })
@@ -148,51 +113,50 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
   if (truckUpsertError || !truckRows || truckRows.length === 0) {
     throw new Error(`Unable to prepare truck seed data. ${truckUpsertError?.message ?? ""}`.trim());
   }
-
   const typedTrucks = truckRows as TruckRow[];
-  const { data: collectionPointRows } = await supabase
-    .from("collection_points")
-    .select("label, lat, lng")
+
+  // Load active weekly route templates with their ordered stops + CP coords.
+  const { data: templateRows, error: templatesError } = await supabase
+    .from("route_templates")
+    .select(
+      "id, name, zone_id, is_active, route_template_stops(stop_order, collection_points(id, label, lat, lng))",
+    )
     .eq("is_active", true)
-    .order("created_at", { ascending: true })
-    .limit(60);
+    .order("created_at", { ascending: true });
+  if (templatesError) {
+    throw new Error(`Unable to load route templates. ${templatesError.message}`);
+  }
 
-  const collectionPointStops: StopSeed[] =
-    (collectionPointRows as CollectionPointRow[] | null)?.map((row) => ({
-      label: row.label,
-      lat: row.lat,
-      lng: row.lng,
-      stopType: "pickup" as const,
-      weight: 3,
-    })) ?? [];
+  const templates = (templateRows ?? []) as unknown as TemplateRow[];
 
-  const { data: hotspotRows } = await supabase
-    .from("hotspots")
-    .select("center_lat, center_lng, severity")
-    .eq("status", "active")
-    .order("updated_at", { ascending: false })
-    .limit(12);
+  // Filter to templates that actually have ≥2 valid stops.
+  const usableTemplates = templates
+    .map((t) => ({
+      ...t,
+      stops: (t.route_template_stops ?? [])
+        .filter((s) => s.collection_points !== null)
+        .sort((a, b) => a.stop_order - b.stop_order)
+        .map((s) => ({
+          label: s.collection_points!.label,
+          lat: s.collection_points!.lat,
+          lng: s.collection_points!.lng,
+          stopType: "pickup" as const,
+        })),
+    }))
+    .filter((t) => t.stops.length >= 2);
 
-  const hotspotStops: StopSeed[] =
-    (hotspotRows as HotspotRow[] | null)?.map((row, index) => ({
-      label: `Hotspot ${index + 1}`,
-      lat: row.center_lat,
-      lng: row.center_lng,
-      stopType: "pickup" as const,
-      weight: row.severity === "critical" ? 4 : row.severity === "high" ? 3 : 2,
-    })) ?? [];
+  if (usableTemplates.length === 0) {
+    return {
+      ok: false,
+      mode: preferORS ? "ors" : "mock",
+      routeDate,
+      summary: { truckCount: 0, routeCount: 0, stopCount: 0 },
+      routes: [],
+      message: "No weekly routes defined. Create a weekly route in Route Planner before optimizing.",
+    };
+  }
 
-  const stopPool =
-    collectionPointStops.length > 0
-      ? [...collectionPointStops, ...hotspotStops.slice(0, Math.max(0, 24 - collectionPointStops.length))]
-      : hotspotStops.length > 0
-        ? hotspotStops
-        : DEFAULT_STOPS;
-
-  const activeTruckCount = pickTruckCount(stopPool.length, typedTrucks.length);
-  const activeTrucks = typedTrucks.slice(0, activeTruckCount);
-  const stopBuckets = splitStopsIntoBuckets(stopPool, activeTrucks.length);
-
+  // Clear today's previously-optimized routes (cascades route_stops + route_progress).
   const { data: existingRoutes, error: existingRoutesError } = await supabase
     .from("routes")
     .select("id")
@@ -201,72 +165,78 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
   if (existingRoutesError) {
     throw new Error(`Unable to check existing optimized routes. ${existingRoutesError.message}`);
   }
-
   if (existingRoutes && existingRoutes.length > 0) {
-    const existingIds = existingRoutes.map((route) => route.id);
-    const { error: cleanupError } = await supabase.from("routes").delete().in("id", existingIds);
+    const ids = existingRoutes.map((r) => r.id);
+    const { error: cleanupError } = await supabase.from("routes").delete().in("id", ids);
     if (cleanupError) {
       throw new Error(`Unable to clear previous optimized routes. ${cleanupError.message}`);
     }
   }
 
-  let mode: OptimizationMode = preferORS ? "ors" : "mock";
-  let warning: string | undefined;
+  // Track per-template geometry mode + reasons; pick worst-quality as overall.
+  const modeRanks: Record<OptimizationMode, number> = { ors: 2, osrm: 1, mock: 0 };
+  const templateGeometryModes: OptimizationMode[] = [];
+  let firstFallbackReason: string | null = null;
 
+  // One route per template, road-geometry-routed (ORS → OSRM → mock), round-robin trucks.
   const routeInsertPayload = await Promise.all(
-    activeTrucks.map(async (truck, index) => {
-      const assignedStops = stopBuckets[index] ?? [];
-      const fallbackDistance = estimateDistanceKm(assignedStops);
-      const fallbackDuration = Math.max(25, assignedStops.length * 18);
+    usableTemplates.map(async (template, idx) => {
+      const truck = typedTrucks[idx % typedTrucks.length];
+      const stops = template.stops;
+      const fallbackDist = estimateDistanceKm(stops);
+      const fallbackDur = Math.max(15, stops.length * 8);
 
-      let polylineStr = makePolyline(assignedStops);
-      let estimatedDistanceKm = fallbackDistance;
-      let estimatedDurationMinutes = fallbackDuration;
+      let polylineStr = straightLinePolyline(stops);
+      let distanceKm = fallbackDist;
+      let durationMin = fallbackDur;
 
-      if (preferORS && orsKey && assignedStops.length >= 2) {
-        const geometry = await getORSRoadGeometry(orsKey, assignedStops);
-        if (geometry.mode === "ors") {
-          polylineStr = geometry.polyline;
-          estimatedDistanceKm = geometry.distanceKm;
-          estimatedDurationMinutes = geometry.durationMin;
-        } else {
-          mode = "mock";
-          warning = "ORS unavailable, switched to mock fallback.";
-        }
+      const geometry = await getORSRoadGeometry(orsKey, stops);
+      polylineStr = geometry.polyline;
+      distanceKm = geometry.distanceKm;
+      durationMin = geometry.durationMin;
+
+      templateGeometryModes.push(geometry.mode);
+      if (!firstFallbackReason && geometry.reason && geometry.mode !== "ors") {
+        firstFallbackReason = geometry.reason;
       }
 
-      const estimatedFuelLiters = Number((estimatedDistanceKm / 3.8).toFixed(2));
       return {
-        route_date: routeDate,
-        truck_id: truck.id,
-        status: "published",
-        source: "ai_optimized",
-        estimated_distance_km: estimatedDistanceKm,
-        estimated_duration_minutes: estimatedDurationMinutes,
-        estimated_fuel_liters: estimatedFuelLiters,
-        polyline: polylineStr,
+        templateRef: template,
+        truckId: truck.id,
+        payload: {
+          route_date: routeDate,
+          truck_id: truck.id,
+          zone_id: template.zone_id,
+          template_id: template.id,
+          status: "published" as const,
+          source: "ai_optimized" as const,
+          estimated_distance_km: distanceKm,
+          estimated_duration_minutes: durationMin,
+          estimated_fuel_liters: Number((distanceKm / 3.8).toFixed(2)),
+          polyline: polylineStr,
+        },
       };
     }),
   );
 
   const { data: insertedRoutes, error: routeInsertError } = await supabase
     .from("routes")
-    .insert(routeInsertPayload)
+    .insert(routeInsertPayload.map((r) => r.payload))
     .select("id, truck_id, estimated_distance_km, estimated_duration_minutes, estimated_fuel_liters, polyline");
   if (routeInsertError || !insertedRoutes) {
     throw new Error(`Unable to persist optimized routes. ${routeInsertError?.message ?? ""}`.trim());
   }
 
   const stopRows = insertedRoutes.flatMap((routeRow, index) => {
-    const assignedStops = stopBuckets[index] ?? [];
-    return assignedStops.map((stop, stopIndex) => ({
+    const stops = routeInsertPayload[index].templateRef.stops;
+    return stops.map((stop, stopIndex) => ({
       route_id: routeRow.id,
       stop_order: stopIndex + 1,
       label: stop.label,
       lat: stop.lat,
       lng: stop.lng,
       stop_type: stop.stopType,
-      status: "pending",
+      status: "pending" as const,
     }));
   });
 
@@ -283,12 +253,12 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
   }
 
   if (insertedStopRows.length > 0) {
-    const routeToTruck = new Map(insertedRoutes.map((route) => [route.id, route.truck_id]));
+    const routeToTruck = new Map(insertedRoutes.map((r) => [r.id, r.truck_id]));
     const progressRows = insertedStopRows.map((stop) => ({
       route_id: stop.route_id,
       stop_id: stop.id,
       truck_id: routeToTruck.get(stop.route_id),
-      status: "pending",
+      status: "pending" as const,
     }));
     const { error: progressInsertError } = await supabase.from("route_progress").insert(progressRows);
     if (progressInsertError) {
@@ -296,9 +266,24 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
     }
   }
 
+  const finalMode: OptimizationMode =
+    templateGeometryModes.length === 0
+      ? "mock"
+      : templateGeometryModes.reduce(
+          (worst, m) => (modeRanks[m] < modeRanks[worst] ? m : worst),
+          templateGeometryModes[0] as OptimizationMode,
+        );
+  const modeLabel = finalMode === "ors" ? "ORS road" : finalMode === "osrm" ? "OSRM road" : "straight-line";
+  let finalWarning: string | undefined;
+  if (finalMode === "mock") {
+    finalWarning = `Road routing unavailable${firstFallbackReason ? ` (${firstFallbackReason})` : ""}; drew straight-line polylines.`;
+  } else if (finalMode === "osrm") {
+    finalWarning = `ORS unavailable${firstFallbackReason ? ` (${firstFallbackReason})` : ""}; used OSRM public road geometry.`;
+  }
+
   return {
     ok: true,
-    mode,
+    mode: finalMode,
     routeDate,
     summary: {
       truckCount: insertedRoutes.length,
@@ -306,6 +291,7 @@ export async function runRouteOptimization(options?: RunOptions): Promise<Optimi
       stopCount: insertedStopRows.length,
     },
     routes: insertedRoutes as InsertedRouteRow[],
-    warning,
+    warning: finalWarning,
+    message: `Optimized ${insertedRoutes.length} weekly route(s) into today's run (${modeLabel} geometry).`,
   };
 }

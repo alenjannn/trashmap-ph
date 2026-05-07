@@ -3,6 +3,8 @@
 ## Purpose
 Fast setup guide for teammates testing on own devices using own keys/projects.
 
+> **New devs:** read `docs/SYSTEM_OVERVIEW.md` first. It maps every system function (collection points, weekly routes, hotspots, schedules, community map, driver assigning, navigation HUD) to the exact tables, endpoints, and files you need to touch.
+
 ## HOW TO 1: Create Supabase Project
 1. Go to [https://supabase.com](https://supabase.com) and sign in.
 2. Click **New project**.
@@ -225,3 +227,60 @@ Checks:
 3. **Driver app:** ensure `route_assignments` has an **active** row (`is_active = true`) linking `driver_id` to the route; without it, `routes` / `route_stops` / `trucks` are hidden.
 4. **Citizen / anon:** `reports`, `schedules`, `recyclers` remain readable for map and tabs; fleet tables are not.
 5. **Server-only work** (optimizer, demo seeds, HTTP DELETE/materialize with `ROUTE_OPS_SECRET`) uses **service role** and bypasses RLS—if those fail, check `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`, not RLS.
+
+## HOW TO 19: Assign Driver Permanently (Weekly Template)
+1. Open dashboard route planner page as admin.
+2. In **Driver Assignment** panel, paste `ROUTE_OPS_SECRET`.
+3. Select weekly template.
+4. Tick one or more drivers in **Add drivers** list.
+5. Click **Assign selected**.
+6. Confirm assigned chips appear.
+
+Result:
+- Rows created in `route_template_assignments` with `is_active=true`.
+- Driver app shows template in **My weekly routes** list.
+
+## HOW TO 20: Review Completed Route (Playback + Missed Pickup)
+1. Open dashboard as admin.
+2. In **Manage Data > Today's routes**, click route status row (not Delete button).
+3. Route report modal opens with:
+   - summary (truck, driver, status)
+   - stops table
+   - missed pickup callout (if any)
+   - GPS playback map + scrubber
+4. Drag scrubber to inspect breadcrumb sequence.
+
+For routes ended with unresolved stops:
+- Route status becomes `completed_with_issues`.
+- `reports` rows with `report_type='missed_pickup'` should exist.
+
+## HOW TO 21: Driver Navigation (Phase 6)
+Pre-reqs: Phase 1 schema applied, driver assigned to a weekly template (HOW TO 19), Next.js reachable from device (`API_BASE_URL` resolves to a non-loopback URL on the emulator/device).
+
+### Run app with API base URL
+Android emulator (host loopback is `10.0.2.2`):
+```powershell
+& "C:\Users\YOUR_SYSTEM_NAME\.puro\envs\stable\flutter\bin\flutter.bat" run -d emulator-5554 ^
+  --dart-define=SUPABASE_URL="https://YOUR_PROJECT.supabase.co" ^
+  --dart-define=SUPABASE_ANON_KEY="YOUR_REAL_ANON_KEY" ^
+  --dart-define=API_BASE_URL="http://10.0.2.2:3000"
+```
+iOS simulator: `--dart-define=API_BASE_URL="http://127.0.0.1:3000"`.
+Physical device: use the dev machine's LAN IP (e.g. `http://192.168.1.42:3000`) and ensure firewall allows port 3000.
+
+### Driver flow
+1. Login as driver. **My weekly routes** list opens.
+2. Tap a template. **Preview** shows polyline + ordered stops.
+3. Tap **Start Route**. If outside the schedule window the app prompts Early/Late confirmation; tap **Start** to force.
+4. **Navigation** screen opens:
+   - Top HUD: next maneuver instruction + distance, ETA, stops counter, online/offline pill.
+   - Map follows GPS. Truck arrow rotates with heading. Stops change color as their status updates (teal=pending, amber=arrived, green=completed, gray=skipped, red=missed).
+   - Bottom sheet: per-stop **Confirm** / **Skip** actions.
+5. Telemetry posts every 5 s to `/api/routes/:id/telemetry`. Offline pings buffer in memory and drain when connectivity returns.
+6. Within 50 m of a stop for 3 s, the engine auto-flips it to `arrived` and writes `route_progress`.
+7. Tap the red stop icon (top right) to **End Route**. Confirm dialog warns of unresolved stops; ending posts to `/api/routes/:id/end` which marks pending/arrived stops as `missed` and creates `report_type='missed_pickup'` rows.
+
+### Verify on the dashboard
+- Live truck arrow on map updates while driving.
+- After end-route: route status = `completed_with_issues` (when unresolved) or `completed`. Truck status returns to `idle`.
+- Open **Today's routes** → click route to see the playback modal.

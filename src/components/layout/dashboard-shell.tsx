@@ -1,7 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { RouteReportModal } from "@/components/dashboard/route-report-modal";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type BarangayLeaderboardItem,
   type DashboardPin,
@@ -10,6 +11,7 @@ import {
   type IncidentItem,
   type RiskZoneItem,
 } from "@/components/layout/dashboard-mock-data";
+import type { LiveTruckMarker } from "@/components/map/lgu-map";
 import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 import { BarangayLeaderboardPanel } from "@/components/panels/barangay-leaderboard-panel";
 import { FleetStatusPanel } from "@/components/panels/fleet-status-panel";
@@ -56,18 +58,22 @@ type RouteRow = {
 type RouteProgressRow = {
   route_id: string;
   stop_id: string | null;
-  status: "pending" | "arrived" | "completed" | "skipped";
+  status: "pending" | "arrived" | "completed" | "skipped" | "missed";
   updated_at: string;
 };
 
-type HotspotRow = {
+type TemplateAssignmentRow = {
   id: string;
-  center_lat: number;
-  center_lng: number;
-  severity: "low" | "medium" | "high" | "critical";
-  unique_reporters_count: number;
-  radius_meters: number;
-  status: "active" | "cleared";
+  driverId: string;
+  displayName: string | null;
+  assignedAt: string;
+};
+
+type LivePingRow = {
+  lat: number;
+  lng: number;
+  heading: number | null;
+  recorded_at: string;
 };
 
 type CollectionPointRow = {
@@ -93,6 +99,7 @@ type RiskZoneRow = {
   center_lng: number;
   score: number;
   level: "low" | "medium" | "high" | "critical";
+  radius_meters: number | null;
 };
 
 type ZoneRow = {
@@ -111,6 +118,14 @@ type RouteAuditRow = {
 type DriverProfileRow = {
   user_id: string;
   display_name: string | null;
+  email_masked: string | null;
+};
+
+type AdminRosterRpcRow = {
+  user_id: string;
+  display_name: string | null;
+  role: "admin" | "citizen" | "driver";
+  email_masked: string | null;
 };
 
 type RouteNotificationRow = {
@@ -154,7 +169,6 @@ function parsePolyline(polyline: string | null): [number, number][] {
 
 export function DashboardShell() {
   const [reportPins, setReportPins] = useState<DashboardPin[]>([]);
-  const [hotspotPins, setHotspotPins] = useState<DashboardPin[]>([]);
   const [collectionPointPins, setCollectionPointPins] = useState<DashboardPin[]>([]);
   const [riskZonePins, setRiskZonePins] = useState<DashboardPin[]>([]);
   const [routePaths, setRoutePaths] = useState<DashboardRoutePath[]>([]);
@@ -174,7 +188,16 @@ export function DashboardShell() {
   const [templateDay, setTemplateDay] = useState("thursday");
   const [templateZoneId, setTemplateZoneId] = useState("");
   const [selectedRouteId, setSelectedRouteId] = useState("");
-  const [selectedDriverId, setSelectedDriverId] = useState("");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [selectedDriverIdsForAssign, setSelectedDriverIdsForAssign] = useState<string[]>([]);
+  const [templateAssignmentsByTemplate, setTemplateAssignmentsByTemplate] = useState<
+    Record<string, TemplateAssignmentRow[]>
+  >({});
+  const [templateStartHour, setTemplateStartHour] = useState(6);
+  const [templateEndHour, setTemplateEndHour] = useState(12);
+  const [reportModalRouteId, setReportModalRouteId] = useState<string | null>(null);
+  const [livePingByRouteId, setLivePingByRouteId] = useState<Record<string, LivePingRow>>({});
+  const [pendingStopsByRouteId, setPendingStopsByRouteId] = useState<Record<string, number>>({});
   const [routeOpsMessage, setRouteOpsMessage] = useState<string | null>(null);
   const [isRoutePlannerMode, setIsRoutePlannerMode] = useState(false);
   const [isAddingCollectionPoint, setIsAddingCollectionPoint] = useState(false);
@@ -194,14 +217,67 @@ export function DashboardShell() {
   const [zones, setZones] = useState<ZoneRow[]>([]);
   const [activeLogTab, setActiveLogTab] = useState<"all" | "audit" | "notifications" | "pickups">("all");
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
+  const [supabaseDataError, setSupabaseDataError] = useState<string | null>(null);
+  const [dangerConfirm, setDangerConfirm] = useState<{
+    title: string;
+    message: string;
+    confirmLabel: string;
+  } | null>(null);
+  const [isDangerConfirmSubmitting, setIsDangerConfirmSubmitting] = useState(false);
+  const pendingDangerActionRef = useRef<(() => Promise<void>) | null>(null);
 
   const supabase = getBrowserSupabaseClient();
   const pins = useMemo(
-    () => [...reportPins, ...hotspotPins, ...collectionPointPins, ...riskZonePins],
-    [collectionPointPins, hotspotPins, reportPins, riskZonePins],
+    () => [...reportPins, ...collectionPointPins, ...riskZonePins],
+    [collectionPointPins, reportPins, riskZonePins],
   );
 
+  const liveTrucks = useMemo((): LiveTruckMarker[] => {
+    return Object.entries(livePingByRouteId)
+      .map(([routeId, ping]) => {
+        const path = routePaths.find((r) => r.id === routeId);
+        const routeRow = activeRouteRows.find((r) => r.id === routeId);
+        if (!path || routeRow?.status !== "in_progress") return null;
+        return {
+          routeId,
+          lat: ping.lat,
+          lng: ping.lng,
+          heading: ping.heading,
+          color: path.color,
+          label: path.truckLabel,
+          remainingStops: pendingStopsByRouteId[routeId] ?? 0,
+        };
+      })
+      .filter((x): x is LiveTruckMarker => x !== null);
+  }, [livePingByRouteId, routePaths, activeRouteRows, pendingStopsByRouteId]);
+
   const configError = !supabase ? "Supabase environment is not configured." : null;
+
+  useEffect(() => {
+    const tid = selectedTemplateId;
+    const token = opsToken.trim();
+    if (!tid || !token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/routes/templates/${tid}/assignments`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = (await res.json()) as {
+          ok?: boolean;
+          assignments?: TemplateAssignmentRow[];
+        };
+        if (cancelled || !data.ok || !Array.isArray(data.assignments)) return;
+        const list = data.assignments as TemplateAssignmentRow[];
+        setTemplateAssignmentsByTemplate((prev) => ({ ...prev, [tid]: list }));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTemplateId, opsToken, dashboardRefreshKey]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -253,19 +329,7 @@ export function DashboardShell() {
         lng: row.center_lng,
         type: "risk_zone",
         label: `${row.name} (${row.level.toUpperCase()}, ${(row.score * 100).toFixed(1)}%)`,
-        radiusMeters: radiusByLevel[row.level],
-      };
-    }
-
-    function mapHotspotToPin(row: HotspotRow): DashboardPin {
-      return {
-        id: `hotspot-${row.id}`,
-        lat: row.center_lat,
-        lng: row.center_lng,
-        type: "hotspot",
-        label: `${row.severity.toUpperCase()} hotspot (${row.unique_reporters_count} reporters, ${row.radius_meters}m)`,
-        wasteType: "unknown",
-        radiusMeters: row.radius_meters,
+        radiusMeters: row.radius_meters ?? radiusByLevel[row.level],
       };
     }
 
@@ -322,18 +386,6 @@ export function DashboardShell() {
       setIsLoadingPins(false);
     }
 
-    async function loadHotspots() {
-      const { data, error } = await client
-        .from("hotspots")
-        .select("id, center_lat, center_lng, severity, unique_reporters_count, radius_meters, status")
-        .eq("status", "active")
-        .order("updated_at", { ascending: false })
-        .limit(200);
-      if (error) return;
-      const rows = (data ?? []).map((row) => row as HotspotRow);
-      setHotspotPins(rows.map((row) => mapHotspotToPin(row)));
-    }
-
     async function loadFleet() {
       const { data, error } = await client
         .from("trucks")
@@ -361,7 +413,7 @@ export function DashboardShell() {
     async function loadRiskZones() {
       const { data, error } = await client
         .from("risk_zones")
-        .select("id, name, center_lat, center_lng, score, level")
+        .select("id, name, center_lat, center_lng, score, level, radius_meters")
         .order("score", { ascending: false })
         .limit(50);
       if (error) return;
@@ -392,7 +444,14 @@ export function DashboardShell() {
         .from("routes")
         .select("id, truck_id, route_date, status, estimated_distance_km, estimated_fuel_liters, polyline")
         .eq("route_date", routeDate)
-        .in("status", ["published", "scheduled", "in_progress", "completed", "completed_with_issues"])
+        .in("status", [
+          "draft",
+          "published",
+          "scheduled",
+          "in_progress",
+          "completed",
+          "completed_with_issues",
+        ])
         .order("created_at", { ascending: false })
         .limit(20);
       if (error) return;
@@ -424,15 +483,25 @@ export function DashboardShell() {
       let progressRows: RouteProgressRow[] = [];
       const stopCountByRoute = new Map<string, number>();
 
+      if (routeIds.length === 0) {
+        setPendingStopsByRouteId({});
+      }
+
       if (routeIds.length > 0) {
         const { data: routeStopsData } = await client
           .from("route_stops")
-          .select("route_id")
+          .select("route_id, status")
           .in("route_id", routeIds);
+        const pendingStopsByRoute = new Map<string, number>();
         for (const row of routeStopsData ?? []) {
           const routeId = row.route_id as string;
           stopCountByRoute.set(routeId, (stopCountByRoute.get(routeId) ?? 0) + 1);
+          const st = row.status as string;
+          if (st === "pending" || st === "arrived") {
+            pendingStopsByRoute.set(routeId, (pendingStopsByRoute.get(routeId) ?? 0) + 1);
+          }
         }
+        setPendingStopsByRouteId(Object.fromEntries(pendingStopsByRoute));
 
         const { data: progressData } = await client
           .from("route_progress")
@@ -469,8 +538,13 @@ export function DashboardShell() {
           const completedStops = truckRoutes.reduce((total, route) => total + (completedByRoute.get(route.id) ?? 0), 0);
           const progressPercent =
             totalStops === 0 ? 0 : Math.max(0, Math.min(100, Math.round((completedStops / totalStops) * 100)));
+
+          const allRoutesClosed = truckRoutes.every((route) =>
+            ["completed", "completed_with_issues", "cancelled"].includes(route.status),
+          );
+
           const status: FleetTruck["status"] =
-            progressPercent === 100
+            allRoutesClosed || progressPercent === 100
               ? "idle"
               : progressPercent > 0
                 ? "collecting"
@@ -487,6 +561,45 @@ export function DashboardShell() {
         }),
       );
 
+      const inProgressIds = rows.filter((r) => r.status === "in_progress").map((r) => r.id);
+      if (inProgressIds.length > 0) {
+        const { data: pingRows } = await client
+          .from("truck_pings")
+          .select("route_id, lat, lng, heading, recorded_at")
+          .in("route_id", inProgressIds)
+          .order("recorded_at", { ascending: false })
+          .limit(400);
+        const serverLatest = new Map<string, LivePingRow>();
+        for (const p of pingRows ?? []) {
+          const rid = p.route_id as string;
+          if (!serverLatest.has(rid)) {
+            const h = p.heading as number | null | undefined;
+            serverLatest.set(rid, {
+              lat: p.lat as number,
+              lng: p.lng as number,
+              heading: h != null && Number.isFinite(Number(h)) ? Number(h) : null,
+              recorded_at: p.recorded_at as string,
+            });
+          }
+        }
+        setLivePingByRouteId((prev) => {
+          const merged: Record<string, LivePingRow> = {};
+          for (const id of inProgressIds) {
+            const s = serverLatest.get(id);
+            const p = prev[id];
+            let pick: LivePingRow | undefined;
+            if (s && p) {
+              pick = new Date(s.recorded_at) >= new Date(p.recorded_at) ? s : p;
+            } else {
+              pick = s ?? p;
+            }
+            if (pick) merged[id] = pick;
+          }
+          return merged;
+        });
+      } else {
+        setLivePingByRouteId({});
+      }
     }
 
     async function loadRouteAssignmentsAndAudit(routeIds: string[]) {
@@ -527,13 +640,21 @@ export function DashboardShell() {
       setRouteNotificationRows((notificationData ?? []) as RouteNotificationRow[]);
     }
 
-    async function loadDrivers() {
-      const { data } = await client
-        .from("app_user_profiles")
-        .select("user_id, display_name")
-        .eq("role", "driver")
-        .limit(100);
-      setDriverProfiles((data ?? []) as DriverProfileRow[]);
+    async function loadDrivers(): Promise<string | null> {
+      const { data, error } = await client.rpc("list_admin_user_roster");
+      if (error) {
+        setDriverProfiles([]);
+        return error.message;
+      }
+      const rows = ((data ?? []) as AdminRosterRpcRow[]).filter((row) => row.role === "driver");
+      setDriverProfiles(
+        rows.map((row) => ({
+          user_id: row.user_id,
+          display_name: row.display_name,
+          email_masked: row.email_masked,
+        })),
+      );
+      return null;
     }
 
     async function loadZones() {
@@ -541,25 +662,38 @@ export function DashboardShell() {
       setZones((data ?? []) as ZoneRow[]);
     }
 
-    async function loadRouteTemplates() {
-      const { data } = await client
+    async function loadRouteTemplates(): Promise<string | null> {
+      const { data, error } = await client
         .from("route_templates")
         .select("id, name, recurrence_day, is_active")
-        .eq("is_active", true)
         .order("created_at", { ascending: false })
         .limit(40);
+      if (error) {
+        setRouteTemplates([]);
+        return error.message;
+      }
       setRouteTemplates((data ?? []) as RouteTemplateRow[]);
+      return null;
     }
 
-    void loadReports();
-    void loadHotspots();
-    void loadFleet();
-    void loadCollectionPoints();
-    void loadRiskZones();
-    void loadRoutesAndProgress();
-    void loadDrivers();
-    void loadZones();
-    void loadRouteTemplates();
+    void (async () => {
+      const { error: refreshError, data: refreshed } = await client.auth.refreshSession();
+      const hints: string[] = [];
+      if (refreshError) hints.push(`Auth refresh: ${refreshError.message}`);
+      else if (!refreshed.session) hints.push("No JWT — sign out and sign in again.");
+      const driverErr = await loadDrivers();
+      if (driverErr) hints.push(`Drivers: ${driverErr}`);
+      const templateErr = await loadRouteTemplates();
+      if (templateErr) hints.push(`Weekly routes: ${templateErr}`);
+      setSupabaseDataError(hints.length > 0 ? hints.join(" · ") : null);
+
+      void loadReports();
+      void loadFleet();
+      void loadCollectionPoints();
+      void loadRiskZones();
+      void loadRoutesAndProgress();
+      void loadZones();
+    })();
 
     const reportsChannel = client
       .channel("dashboard-reports-live-v2")
@@ -589,7 +723,7 @@ export function DashboardShell() {
         "postgres_changes",
         { event: "*", schema: "public", table: "hotspots" },
         () => {
-          void loadHotspots();
+          void loadRiskZones();
         },
       )
       .subscribe();
@@ -623,6 +757,36 @@ export function DashboardShell() {
         { event: "*", schema: "public", table: "route_stops" },
         () => {
           void loadRoutesAndProgress();
+        },
+      )
+      .subscribe();
+
+    const truckPingsChannel = client
+      .channel("dashboard-truck-pings-live-v1")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "truck_pings" },
+        (payload) => {
+          const row = payload.new as {
+            route_id: string;
+            lat: number;
+            lng: number;
+            heading: number | null;
+            recorded_at: string;
+          };
+          if (!row?.route_id) return;
+          const h = row.heading;
+          const nextPing: LivePingRow = {
+            lat: row.lat,
+            lng: row.lng,
+            heading: h != null && Number.isFinite(Number(h)) ? Number(h) : null,
+            recorded_at: row.recorded_at,
+          };
+          setLivePingByRouteId((prev) => {
+            const old = prev[row.route_id];
+            if (old && new Date(old.recorded_at) > new Date(nextPing.recorded_at)) return prev;
+            return { ...prev, [row.route_id]: nextPing };
+          });
         },
       )
       .subscribe();
@@ -667,28 +831,42 @@ export function DashboardShell() {
       void client.removeChannel(routesChannel);
       void client.removeChannel(routeProgressChannel);
       void client.removeChannel(routeStopsChannel);
+      void client.removeChannel(truckPingsChannel);
       void client.removeChannel(collectionPointsChannel);
       void client.removeChannel(routeTemplatesChannel);
       void client.removeChannel(riskZonesChannel);
     };
   }, [supabase, selectedRouteId, dashboardRefreshKey]);
 
-  async function callOpsDelete(path: string): Promise<boolean> {
+  async function callOpsDelete(path: string): Promise<Record<string, unknown> | null> {
     setRouteOpsMessage(null);
     if (!opsToken.trim()) {
-      setRouteOpsMessage("Route ops token required.");
-      return false;
+      setRouteOpsMessage("Route ops token required. Paste the same token as in Driver Assignment above.");
+      return null;
     }
-    const response = await fetch(path, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${opsToken.trim()}` },
-    });
-    const payload = (await response.json()) as { ok?: boolean; message?: string };
-    if (!response.ok || !payload.ok) {
-      setRouteOpsMessage(payload.message ?? "Delete failed.");
-      return false;
+    try {
+      const response = await fetch(path, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${opsToken.trim()}` },
+      });
+      let payload: Record<string, unknown> = {};
+      try {
+        payload = (await response.json()) as Record<string, unknown>;
+      } catch {
+        setRouteOpsMessage("Delete failed (invalid server response).");
+        return null;
+      }
+      const ok = payload.ok === true;
+      const message = typeof payload.message === "string" ? payload.message : undefined;
+      if (!response.ok || !ok) {
+        setRouteOpsMessage(message ?? `Delete failed (${response.status}).`);
+        return null;
+      }
+      return payload;
+    } catch {
+      setRouteOpsMessage("Delete failed (network error).");
+      return null;
     }
-    return true;
   }
 
   async function callRouteOps(path: string, body: Record<string, unknown>) {
@@ -745,6 +923,8 @@ export function DashboardShell() {
         name: templateName,
         ...(zoneForApi ? { zoneId: zoneForApi } : {}),
         recurrenceDay: templateDay,
+        startHour: templateStartHour,
+        endHour: templateEndHour,
         stops: draftRouteStops.map((stop, index) => ({ collectionPointId: stop.id, stopOrder: index + 1 })),
       });
 
@@ -772,48 +952,160 @@ export function DashboardShell() {
     }
   }
 
-  async function handleDeleteRoute(routeId: string) {
-    if (!window.confirm("Delete this route and related stops, progress, and assignments?")) return;
-    const ok = await callOpsDelete(`/api/routes/${routeId}`);
-    if (ok) {
-      setRouteOpsMessage("Route deleted.");
-      if (selectedRouteId === routeId) setSelectedRouteId("");
-      setDashboardRefreshKey((k) => k + 1);
-    }
+  function openDangerConfirm(opts: {
+    title: string;
+    message: string;
+    confirmLabel: string;
+    action: () => Promise<void>;
+  }) {
+    pendingDangerActionRef.current = opts.action;
+    setDangerConfirm({
+      title: opts.title,
+      message: opts.message,
+      confirmLabel: opts.confirmLabel,
+    });
   }
 
-  async function handleDeleteTemplate(templateId: string) {
-    if (!window.confirm("Delete this weekly route template and its stop list?")) return;
-    const ok = await callOpsDelete(`/api/routes/templates/${templateId}`);
-    if (ok) {
-      setRouteOpsMessage("Weekly template deleted.");
-      setDashboardRefreshKey((k) => k + 1);
-    }
+  function closeDangerConfirm() {
+    if (isDangerConfirmSubmitting) return;
+    pendingDangerActionRef.current = null;
+    setDangerConfirm(null);
   }
 
-  async function handleDeleteCollectionPoint(cpId: string, label: string) {
-    if (!window.confirm(`Remove collection point "${label}"? Templates referencing it will lose those stops.`)) return;
-    const ok = await callOpsDelete(`/api/collection-points/${cpId}`);
-    if (ok) {
-      setRouteOpsMessage("Collection point deleted.");
-      setDashboardRefreshKey((k) => k + 1);
-    }
-  }
-
-  async function handleAssignDriver(mode: "manual" | "auto") {
+  async function submitDangerConfirm() {
+    const action = pendingDangerActionRef.current;
+    if (!action || isDangerConfirmSubmitting) return;
+    setIsDangerConfirmSubmitting(true);
     try {
-      if (!selectedRouteId) {
-        setRouteOpsMessage("Select route first.");
+      await action();
+    } finally {
+      pendingDangerActionRef.current = null;
+      setIsDangerConfirmSubmitting(false);
+      setDangerConfirm(null);
+    }
+  }
+
+  useEffect(() => {
+    if (!dangerConfirm) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || isDangerConfirmSubmitting) return;
+      pendingDangerActionRef.current = null;
+      setDangerConfirm(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [dangerConfirm, isDangerConfirmSubmitting]);
+
+  function handleDeleteRoute(routeId: string) {
+    openDangerConfirm({
+      title: "Delete route",
+      message: "Delete this route and related stops, progress, and assignments?",
+      confirmLabel: "Delete",
+      action: async () => {
+        const result = await callOpsDelete(`/api/routes/${routeId}`);
+        if (result) {
+          setRouteOpsMessage("Route deleted.");
+          if (selectedRouteId === routeId) setSelectedRouteId("");
+          setDashboardRefreshKey((k) => k + 1);
+        }
+      },
+    });
+  }
+
+  function handleDeleteTemplate(templateId: string) {
+    openDangerConfirm({
+      title: "Delete weekly route",
+      message: "Delete this saved weekly route and its stop list? Today's materialized run for this route will also be removed from the map.",
+      confirmLabel: "Delete",
+      action: async () => {
+        const result = await callOpsDelete(`/api/routes/templates/${templateId}`);
+        if (result) {
+          const purged = (result as { purgedRoutes?: number } | null)?.purgedRoutes ?? 0;
+          setRouteOpsMessage(
+            purged > 0
+              ? `Weekly route deleted. Removed ${purged} dependent route${purged === 1 ? "" : "s"} from the map.`
+              : "Weekly route deleted.",
+          );
+          setDashboardRefreshKey((k) => k + 1);
+        }
+      },
+    });
+  }
+
+  function handleDeleteCollectionPoint(cpId: string, label: string) {
+    openDangerConfirm({
+      title: "Remove collection point",
+      message: `Remove collection point "${label}"? Templates referencing it will lose those stops, and any materialized routes that ran through it will also be cleared.`,
+      confirmLabel: "Remove",
+      action: async () => {
+        const result = await callOpsDelete(`/api/collection-points/${cpId}`);
+        if (result) {
+          const purged = (result as { purgedRoutes?: number } | null)?.purgedRoutes ?? 0;
+          setRouteOpsMessage(
+            purged > 0
+              ? `Collection point deleted. Cleared ${purged} affected route${purged === 1 ? "" : "s"} from the map.`
+              : "Collection point deleted.",
+          );
+          setDashboardRefreshKey((k) => k + 1);
+        }
+      },
+    });
+  }
+
+  async function handleAssignSelectedDrivers() {
+    try {
+      if (!selectedTemplateId) {
+        setRouteOpsMessage("Select a weekly route first.");
         return;
       }
-      await callRouteOps(`/api/routes/${selectedRouteId}/assign`, {
-        mode,
-        driverId: mode === "manual" ? selectedDriverId : undefined,
-      });
-      setRouteOpsMessage("Driver assigned.");
+      if (selectedDriverIdsForAssign.length === 0) {
+        setRouteOpsMessage("Select at least one driver (checkbox) to assign.");
+        return;
+      }
+      const current = templateAssignmentsByTemplate[selectedTemplateId] ?? [];
+      const already = new Set(current.map((a) => a.driverId));
+      for (const driverId of selectedDriverIdsForAssign) {
+        if (already.has(driverId)) continue;
+        await callRouteOps(`/api/routes/templates/${selectedTemplateId}/assignments`, { driverId });
+      }
+      setSelectedDriverIdsForAssign([]);
+      setRouteOpsMessage("Driver(s) assigned to weekly route.");
+      setDashboardRefreshKey((k) => k + 1);
     } catch (error) {
       setRouteOpsMessage(error instanceof Error ? error.message : "Driver assign failed.");
     }
+  }
+
+  async function handleRemoveTemplateAssignment(assignmentId: string) {
+    if (!selectedTemplateId || !opsToken.trim()) {
+      setRouteOpsMessage("Select a weekly route and enter ops token.");
+      return;
+    }
+    setRouteOpsMessage(null);
+    try {
+      const response = await fetch(
+        `/api/routes/templates/${selectedTemplateId}/assignments/${assignmentId}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${opsToken.trim()}` },
+        },
+      );
+      const payload = (await response.json()) as { ok?: boolean; message?: string };
+      if (!response.ok || !payload.ok) {
+        setRouteOpsMessage(payload.message ?? `Unassign failed (${response.status}).`);
+        return;
+      }
+      setRouteOpsMessage("Driver removed from weekly route.");
+      setDashboardRefreshKey((k) => k + 1);
+    } catch {
+      setRouteOpsMessage("Unassign failed (network error).");
+    }
+  }
+
+  function toggleDriverForAssign(driverId: string) {
+    setSelectedDriverIdsForAssign((prev) =>
+      prev.includes(driverId) ? prev.filter((id) => id !== driverId) : [...prev, driverId],
+    );
   }
 
   async function handleAddCollectionPoint() {
@@ -852,11 +1144,24 @@ export function DashboardShell() {
     setOptimizeMessage(null);
     try {
       const response = await fetch("/api/optimize-routes", { method: "POST" });
-      const payload = (await response.json()) as { ok?: boolean; message?: string; mode?: string };
-      if (!response.ok || !payload.ok) {
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        message?: string;
+        mode?: string;
+        warning?: string;
+      };
+      if (!response.ok) {
         throw new Error(payload.message ?? "Failed to optimize routes.");
       }
-      setOptimizeMessage(`Routes optimized (${payload.mode ?? "mock"} mode).`);
+      const fallbackMsg = payload.ok
+        ? `Routes optimized (${payload.mode ?? "mock"} mode).`
+        : "No weekly routes defined yet.";
+      const composed = payload.warning
+        ? `${payload.message ?? fallbackMsg} ${payload.warning}`
+        : payload.message ?? fallbackMsg;
+      setOptimizeMessage(composed);
+      // Refresh map polylines so the new optimized routes appear.
+      if (payload.ok) setDashboardRefreshKey((k) => k + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to optimize routes.";
       setOptimizeMessage(message);
@@ -879,7 +1184,8 @@ export function DashboardShell() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-[1400px] grid-cols-1 gap-4 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <main className="mx-auto grid max-w-[1400px] grid-cols-1 items-start gap-4 px-6 py-6 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="space-y-4">
         <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-800">Map Overview</h2>
@@ -894,10 +1200,6 @@ export function DashboardShell() {
                   Missed Pickup
                 </span>
                 <span className="inline-flex items-center gap-1">
-                  <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
-                  Hotspot
-                </span>
-                <span className="inline-flex items-center gap-1">
                   <span className="h-2.5 w-2.5 rounded-full bg-teal-500" />
                   Collection Point
                 </span>
@@ -907,7 +1209,7 @@ export function DashboardShell() {
                 </span>
                 <span className="inline-flex items-center gap-1">
                   <span className="h-2.5 w-2.5 rounded-full bg-amber-400" />
-                  Risk Zone
+                  Risk zone (report clusters)
                 </span>
               </div>
               <button
@@ -956,6 +1258,7 @@ export function DashboardShell() {
               <LGUMap
                 pins={pins}
                 routes={routePaths}
+                liveTrucks={liveTrucks}
                 planningMode={isRoutePlannerMode}
                 addingCollectionPoint={isAddingCollectionPoint}
                 draftStopIds={draftRouteStops.map((s) => s.id)}
@@ -969,9 +1272,25 @@ export function DashboardShell() {
               />
             )}
           </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-zinc-600">
+            <span className="flex items-center gap-1">
+              <span className="text-blue-600" aria-hidden>
+                ▲
+              </span>
+              Live truck (in-progress route + GPS ping)
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-teal-500" aria-hidden />
+              Collection point
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-blue-500" aria-hidden />
+              Blue route line
+            </span>
+          </div>
         </section>
 
-        <aside className="space-y-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {/* ── Route Planner ─────────────────────────────────── */}
           <section className="rounded-2xl border border-zinc-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
@@ -1154,55 +1473,121 @@ export function DashboardShell() {
                 className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
               <select
-                value={selectedRouteId}
-                onChange={(event) => setSelectedRouteId(event.target.value)}
+                value={selectedTemplateId}
+                onChange={(event) => {
+                  setSelectedTemplateId(event.target.value);
+                  setSelectedDriverIdsForAssign([]);
+                }}
                 className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
-                <option value="">Select route…</option>
-                {activeRouteRows.map((route) => (
-                  <option key={route.id} value={route.id}>
-                    {route.route_date} · {route.status} · {route.id.slice(0, 8)}…
+                <option value="">Select weekly route…</option>
+                {routeTemplates.length === 0 ? (
+                  <option value="" disabled>
+                    No weekly routes yet — create one in Route Planner
                   </option>
-                ))}
+                ) : (
+                  routeTemplates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name} · {template.recurrence_day}
+                      {template.is_active ? "" : " (inactive)"}
+                    </option>
+                  ))
+                )}
               </select>
-              <select
-                value={selectedDriverId}
-                onChange={(event) => setSelectedDriverId(event.target.value)}
-                className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
-              >
-                <option value="">Select driver…</option>
-                {driverProfiles.map((driver) => (
-                  <option key={driver.user_id} value={driver.user_id}>
-                    {driver.display_name ?? driver.user_id.slice(0, 8)}
-                  </option>
-                ))}
-              </select>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => { void handleAssignDriver("manual"); }}
-                  className="flex-1 cursor-pointer rounded-lg bg-emerald-600 px-2 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
-                >
-                  Assign Manual
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { void handleAssignDriver("auto"); }}
-                  className="flex-1 cursor-pointer rounded-lg bg-zinc-700 px-2 py-2 text-xs font-semibold text-white transition-colors hover:bg-zinc-900"
-                >
-                  Assign Auto
-                </button>
+              <p className="text-[10px] text-zinc-500">
+                Permanent assignment to weekly template. Driver sees it in app and starts when window allows.
+              </p>
+              {(templateAssignmentsByTemplate[selectedTemplateId] ?? []).length > 0 ? (
+                <div>
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Assigned</p>
+                  <div className="flex flex-wrap gap-1">
+                    {(templateAssignmentsByTemplate[selectedTemplateId] ?? []).map((a) => (
+                      <span
+                        key={a.id}
+                        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-900"
+                      >
+                        {a.displayName?.trim() || a.driverId.slice(0, 8)}
+                        <button
+                          type="button"
+                          className="cursor-pointer rounded px-0.5 font-bold text-emerald-700 hover:text-red-600"
+                          aria-label="Remove assignment"
+                          onClick={() => { void handleRemoveTemplateAssignment(a.id); }}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div>
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Add drivers</p>
+                <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border border-zinc-200 bg-zinc-50/80 px-2 py-2">
+                  {driverProfiles.length === 0 ? (
+                    <p className="text-[10px] text-zinc-500">No drivers in roster.</p>
+                  ) : (
+                    driverProfiles.map((driver) => {
+                      const assignedHere = (templateAssignmentsByTemplate[selectedTemplateId] ?? []).some(
+                        (x) => x.driverId === driver.user_id,
+                      );
+                      const name = driver.display_name?.trim();
+                      const idShort = driver.user_id.slice(0, 8);
+                      const label = name && driver.email_masked
+                        ? `${name} · ${driver.email_masked}`
+                        : (driver.email_masked ?? name ?? idShort);
+                      return (
+                        <label
+                          key={driver.user_id}
+                          className="flex cursor-pointer items-center gap-2 text-[11px] text-zinc-800"
+                        >
+                          <input
+                            type="checkbox"
+                            className="rounded border-zinc-300"
+                            disabled={!selectedTemplateId || assignedHere}
+                            checked={selectedDriverIdsForAssign.includes(driver.user_id)}
+                            onChange={() => toggleDriverForAssign(driver.user_id)}
+                          />
+                          <span className={assignedHere ? "text-zinc-400" : ""}>
+                            {label}
+                            {assignedHere ? " (already assigned)" : ""}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => { void handleAssignSelectedDrivers(); }}
+                disabled={!selectedTemplateId || selectedDriverIdsForAssign.length === 0}
+                className="w-full cursor-pointer rounded-lg bg-emerald-600 px-2 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+              >
+                Assign selected
+              </button>
               {!isRoutePlannerMode && routeOpsMessage ? (
                 <p className="rounded-md bg-zinc-50 px-2 py-1.5 text-xs text-zinc-700">{routeOpsMessage}</p>
               ) : null}
             </div>
           </section>
+        </div>
+        </div>
 
+        <aside className="space-y-4">
           {/* ── Delete / manage entities ─────────────────────── */}
           <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
             <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-zinc-800">Manage Data</h3>
             <p className="mb-3 text-[11px] text-zinc-500">Uses route ops token above. Deletes cannot be undone.</p>
+            {supabaseDataError ? (
+              <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-950">
+                {supabaseDataError}
+              </p>
+            ) : null}
+            {routeOpsMessage ? (
+              <p className="mb-3 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-xs text-zinc-800">
+                {routeOpsMessage}
+              </p>
+            ) : null}
 
             <div className="mb-4">
               <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Today&apos;s routes</p>
@@ -1212,9 +1597,13 @@ export function DashboardShell() {
                 ) : (
                   activeRouteRows.map((r) => (
                     <div key={r.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1">
-                      <span className="min-w-0 truncate text-zinc-700">
+                      <button
+                        type="button"
+                        onClick={() => setReportModalRouteId(r.id)}
+                        className="min-w-0 flex-1 cursor-pointer truncate rounded px-0.5 text-left text-zinc-700 underline-offset-2 hover:underline"
+                      >
                         {r.status} · {r.id.slice(0, 8)}
-                      </span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => { void handleDeleteRoute(r.id); }}
@@ -1229,10 +1618,10 @@ export function DashboardShell() {
             </div>
 
             <div className="mb-4">
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Weekly templates</p>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Weekly routes</p>
               <div className="max-h-28 space-y-1 overflow-y-auto text-xs">
                 {routeTemplates.length === 0 ? (
-                  <p className="text-zinc-400">No templates yet.</p>
+                  <p className="text-zinc-400">No saved weekly routes yet.</p>
                 ) : (
                   routeTemplates.map((t) => (
                     <div key={t.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1">
@@ -1336,16 +1725,26 @@ export function DashboardShell() {
               {(activeLogTab === "all" || activeLogTab === "pickups") && pickupReportRows.map((row, idx) => (
                 <div key={`${row.routeId}-${idx}`} className="flex items-start gap-3 px-4 py-2.5">
                   <span className={`mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full ${
-                    row.status === "completed" ? "bg-teal-500" : row.status === "skipped" ? "bg-amber-400" : "bg-zinc-400"
+                    row.status === "completed"
+                      ? "bg-teal-500"
+                      : row.status === "skipped"
+                        ? "bg-amber-400"
+                        : row.status === "missed"
+                          ? "bg-red-500"
+                          : "bg-zinc-400"
                   }`} />
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold text-zinc-800">{row.label}</p>
                     <p className="text-[10px] text-zinc-400">route {row.routeId.slice(0, 8)}</p>
                   </div>
                   <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase ${
-                    row.status === "completed" ? "bg-teal-50 text-teal-700" :
-                    row.status === "skipped" ? "bg-amber-50 text-amber-700" :
-                    "bg-zinc-100 text-zinc-600"
+                    row.status === "completed"
+                      ? "bg-teal-50 text-teal-700"
+                      : row.status === "skipped"
+                        ? "bg-amber-50 text-amber-700"
+                        : row.status === "missed"
+                          ? "bg-red-50 text-red-700"
+                          : "bg-zinc-100 text-zinc-600"
                   }`}>{row.status}</span>
                 </div>
               ))}
@@ -1400,6 +1799,34 @@ export function DashboardShell() {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-zinc-700">Start hour (0–23)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={templateStartHour}
+                    onChange={(e) =>
+                      setTemplateStartHour(Math.min(23, Math.max(0, Number(e.target.value) || 0)))
+                    }
+                    className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold text-zinc-700">End hour (1–24)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={24}
+                    value={templateEndHour}
+                    onChange={(e) =>
+                      setTemplateEndHour(Math.min(24, Math.max(1, Number(e.target.value) || 1)))
+                    }
+                    className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                </div>
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold text-zinc-700">Zone (optional)</label>
@@ -1461,6 +1888,56 @@ export function DashboardShell() {
                 className="flex-1 cursor-pointer rounded-lg bg-teal-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-teal-700 disabled:cursor-not-allowed disabled:bg-teal-300"
               >
                 Create Route
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <RouteReportModal
+        routeId={reportModalRouteId}
+        opsToken={opsToken}
+        onClose={() => setReportModalRouteId(null)}
+      />
+
+      {/* Destructive confirm — matches route modal shell (no native confirm()) */}
+      {dangerConfirm ? (
+        <div
+          className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          role="presentation"
+          onClick={() => closeDangerConfirm()}
+        >
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="danger-confirm-title"
+            className="mx-4 w-full max-w-md rounded-2xl border border-zinc-200 bg-white shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="border-b border-zinc-100 px-6 py-4">
+              <h2 id="danger-confirm-title" className="text-base font-bold text-zinc-900">
+                {dangerConfirm.title}
+              </h2>
+            </div>
+            <div className="px-6 py-5">
+              <p className="text-sm leading-relaxed text-zinc-600">{dangerConfirm.message}</p>
+            </div>
+            <div className="flex gap-3 border-t border-zinc-100 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => closeDangerConfirm()}
+                disabled={isDangerConfirmSubmitting}
+                className="flex-1 cursor-pointer rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void submitDangerConfirm()}
+                disabled={isDangerConfirmSubmitting}
+                className="flex-1 cursor-pointer rounded-lg bg-red-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-400"
+              >
+                {isDangerConfirmSubmitting ? "Working…" : dangerConfirm.confirmLabel}
               </button>
             </div>
           </div>

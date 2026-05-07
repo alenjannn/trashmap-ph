@@ -1,15 +1,26 @@
 "use client";
 
 import "leaflet/dist/leaflet.css";
-import { LatLngBounds } from "leaflet";
-import { useEffect, useState } from "react";
-import { Circle, CircleMarker, MapContainer, Polyline, Popup, Tooltip, TileLayer } from "react-leaflet";
+import L, { LatLngBounds } from "leaflet";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Circle, CircleMarker, MapContainer, Marker, Polyline, Popup, Tooltip, TileLayer } from "react-leaflet";
 import { useMap, useMapEvents } from "react-leaflet";
 import type { DashboardPin, DashboardRoutePath } from "@/components/layout/dashboard-mock-data";
+
+export type LiveTruckMarker = {
+  routeId: string;
+  lat: number;
+  lng: number;
+  heading: number | null;
+  color: string;
+  label: string;
+  remainingStops: number;
+};
 
 type Props = {
   pins: DashboardPin[];
   routes: DashboardRoutePath[];
+  liveTrucks?: LiveTruckMarker[];
   planningMode?: boolean;
   addingCollectionPoint?: boolean;
   draftStopIds?: string[];
@@ -28,49 +39,112 @@ const colorByType: Record<DashboardPin["type"], string> = {
 
 function FitToPins({ pins, routes }: { pins: DashboardPin[]; routes: DashboardRoutePath[] }) {
   const map = useMap();
+  const didFitRef = useRef(false);
 
   useEffect(() => {
+    // Only fit once per mount; subsequent pin/route updates must not yank the user's view
+    // around (and avoid racing Leaflet's zoom transition → `_leaflet_pos` undefined crash).
+    if (didFitRef.current) return;
+
     const routePoints = routes.flatMap((route) => route.points);
     const allPoints = [...pins.map((pin) => [pin.lat, pin.lng] as [number, number]), ...routePoints];
-
     if (allPoints.length === 0) return;
-    if (allPoints.length === 1) {
-      map.setView(allPoints[0], 16);
-      return;
-    }
 
-    const bounds = new LatLngBounds(allPoints);
-    map.fitBounds(bounds.pad(0.2));
+    didFitRef.current = true;
+
+    // Defer one frame so any in-flight zoom transition can settle before we mutate the view.
+    const rafId = requestAnimationFrame(() => {
+      try {
+        if (allPoints.length === 1) {
+          map.setView(allPoints[0], 16, { animate: false });
+          return;
+        }
+        const bounds = new LatLngBounds(allPoints);
+        map.fitBounds(bounds.pad(0.2), { animate: false });
+      } catch {
+        // Leaflet can throw mid-transition if the map element was just unmounted; ignore.
+        didFitRef.current = false;
+      }
+    });
+
+    return () => cancelAnimationFrame(rafId);
   }, [map, pins, routes]);
 
   return null;
 }
 
-function EnsurePanes() {
+const PANE_DEFS: ReadonlyArray<readonly [string, number]> = [
+  ["hotspot-area", 460],
+  ["risk-zone-area", 440],
+  ["route-lines", 430],
+  ["live-trucks", 455],
+  ["report-pins", 500],
+  ["hotspot-top", 650],
+];
+
+function liveTruckArrowIcon(heading: number | null, color: string) {
+  const rot = heading != null && Number.isFinite(heading) ? heading : 0;
+  return L.divIcon({
+    className: "live-truck-arrow-icon",
+    html: `<div style="transform:rotate(${rot}deg);color:${color};font-size:16px;line-height:1;text-shadow:0 0 2px #fff;">▲</div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+}
+
+function LiveTruckMarkers({ liveTrucks }: { liveTrucks: LiveTruckMarker[] }) {
+  const [zoom, setZoom] = useState(14);
+  useMapEvents({
+    zoomend(e) {
+      setZoom(e.target.getZoom());
+    },
+  });
+  const ringR = Math.max(8, Math.min(18, Math.round(26 - zoom)));
+
+  return (
+    <>
+      {liveTrucks.map((t) => (
+        <Fragment key={t.routeId}>
+          <CircleMarker
+            center={[t.lat, t.lng]}
+            radius={ringR}
+            pane="live-trucks"
+            pathOptions={{
+              color: t.color,
+              fillColor: t.color,
+              fillOpacity: 0.28,
+              weight: 2,
+            }}
+          />
+          <Marker position={[t.lat, t.lng]} icon={liveTruckArrowIcon(t.heading, t.color)} pane="live-trucks">
+            <Tooltip direction="top" offset={[0, -12]} opacity={0.95}>
+              <span className="text-xs font-semibold">{t.label}</span>
+              <br />
+              <span className="text-[11px] text-zinc-700">
+                ~{Math.max(0, t.remainingStops) * 8} min ETA · {t.remainingStops} stop
+                {t.remainingStops === 1 ? "" : "s"} left
+              </span>
+            </Tooltip>
+          </Marker>
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+function EnsurePanes({ onReady }: { onReady: () => void }) {
   const map = useMap();
 
   useEffect(() => {
-    if (!map.getPane("hotspot-area")) {
-      const pane = map.createPane("hotspot-area");
-      pane.style.zIndex = "460";
+    for (const [name, zIndex] of PANE_DEFS) {
+      if (!map.getPane(name)) {
+        const pane = map.createPane(name);
+        pane.style.zIndex = String(zIndex);
+        pane.style.pointerEvents = "auto";
+      }
     }
-    if (!map.getPane("risk-zone-area")) {
-      const pane = map.createPane("risk-zone-area");
-      pane.style.zIndex = "440";
-    }
-    if (!map.getPane("report-pins")) {
-      const pane = map.createPane("report-pins");
-      pane.style.zIndex = "500";
-    }
-    if (!map.getPane("route-lines")) {
-      const pane = map.createPane("route-lines");
-      pane.style.zIndex = "430";
-    }
-    if (!map.getPane("hotspot-top")) {
-      const pane = map.createPane("hotspot-top");
-      pane.style.zIndex = "650";
-    }
-  }, [map]);
+    onReady();
+  }, [map, onReady]);
 
   return null;
 }
@@ -264,7 +338,17 @@ function ZoomAwareLayers({
   );
 }
 
-export function LGUMap({ pins, routes, planningMode, addingCollectionPoint, draftStopIds, draftRoutePoints, onCollectionPointClick, onMapClick }: Props) {
+export function LGUMap({
+  pins,
+  routes,
+  liveTrucks = [],
+  planningMode,
+  addingCollectionPoint,
+  draftStopIds,
+  draftRoutePoints,
+  onCollectionPointClick,
+  onMapClick,
+}: Props) {
   const hotspotPins = pins.filter((pin) => pin.type === "hotspot");
   const reportPins = pins.filter(
     (pin) => pin.type === "reported_garbage_point" || pin.type === "missed_pickup",
@@ -272,53 +356,66 @@ export function LGUMap({ pins, routes, planningMode, addingCollectionPoint, draf
   const collectionPoints = pins.filter((pin) => pin.type === "collection_point");
   const riskZonePins = pins.filter((pin) => pin.type === "risk_zone");
 
+  // Gate child layers on pane creation. Children that declare `pane="..."` MUST not render
+  // before EnsurePanes has run; otherwise Leaflet drops them on the wrong pane and zoom
+  // transitions later crash with "Cannot read properties of undefined (reading '_leaflet_pos')".
+  const [panesReady, setPanesReady] = useState(false);
+  const handlePanesReady = useCallback(() => setPanesReady(true), []);
+
   return (
     <MapContainer
       center={[14.676, 121.0437]}
       zoom={14}
-      scrollWheelZoom={false}
+      scrollWheelZoom={true}
+      wheelDebounceTime={40}
+      wheelPxPerZoomLevel={80}
       className={`h-full w-full rounded-xl${planningMode || addingCollectionPoint ? " cursor-crosshair" : ""}`}
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
-      <EnsurePanes />
-      <FitToPins pins={pins} routes={routes} />
-      {(planningMode || addingCollectionPoint) && onMapClick ? (
-        <MapClickHandler onMapClick={onMapClick} />
+      <EnsurePanes onReady={handlePanesReady} />
+      {panesReady ? (
+        <>
+          <FitToPins pins={pins} routes={routes} />
+          {(planningMode || addingCollectionPoint) && onMapClick ? (
+            <MapClickHandler onMapClick={onMapClick} />
+          ) : null}
+          {!planningMode
+            ? routes.map((route) => (
+                <Polyline
+                  key={route.id}
+                  positions={route.points}
+                  pane="route-lines"
+                  pathOptions={{
+                    color: route.color,
+                    weight: 4,
+                    opacity: 0.85,
+                  }}
+                >
+                  <Popup>
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold uppercase tracking-wide">Optimized Route</p>
+                      <p className="text-sm">{route.truckLabel}</p>
+                    </div>
+                  </Popup>
+                </Polyline>
+              ))
+            : null}
+          {!planningMode && liveTrucks.length > 0 ? <LiveTruckMarkers liveTrucks={liveTrucks} /> : null}
+          <ZoomAwareLayers
+            hotspotPins={hotspotPins}
+            reportPins={reportPins}
+            collectionPoints={collectionPoints}
+            riskZonePins={riskZonePins}
+            planningMode={planningMode}
+            draftStopIds={draftStopIds}
+            draftRoutePoints={draftRoutePoints}
+            onCollectionPointClick={onCollectionPointClick}
+          />
+        </>
       ) : null}
-      {!planningMode
-        ? routes.map((route) => (
-            <Polyline
-              key={route.id}
-              positions={route.points}
-              pane="route-lines"
-              pathOptions={{
-                color: route.color,
-                weight: 4,
-                opacity: 0.85,
-              }}
-            >
-              <Popup>
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold uppercase tracking-wide">Optimized Route</p>
-                  <p className="text-sm">{route.truckLabel}</p>
-                </div>
-              </Popup>
-            </Polyline>
-          ))
-        : null}
-      <ZoomAwareLayers
-        hotspotPins={hotspotPins}
-        reportPins={reportPins}
-        collectionPoints={collectionPoints}
-        riskZonePins={riskZonePins}
-        planningMode={planningMode}
-        draftStopIds={draftStopIds}
-        draftRoutePoints={draftRoutePoints}
-        onCollectionPointClick={onCollectionPointClick}
-      />
     </MapContainer>
   );
 }

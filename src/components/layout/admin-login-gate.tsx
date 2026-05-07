@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DashboardShell } from "@/components/layout/dashboard-shell";
+import { getBrowserSupabaseClient } from "@/lib/supabase-browser";
 
 const SESSION_KEY = "tm_admin_session";
 
@@ -26,12 +27,44 @@ function readSession(): AdminSession | null {
 
 export function AdminLoginGate() {
   const [session, setSession] = useState<AdminSession | null>(() => readSession());
+  const [authBootstrapDone, setAuthBootstrapDone] = useState(() => readSession() === null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isAuthed = useMemo(() => Boolean(session?.authorityConfirmed), [session]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const stored = readSession();
+      if (!stored) {
+        setAuthBootstrapDone(true);
+        return;
+      }
+
+      const supabase = getBrowserSupabaseClient();
+      if (!supabase) {
+        setAuthBootstrapDone(true);
+        return;
+      }
+
+      void supabase.auth.getSession().then(({ data: { session: s } }) => {
+        if (!s) {
+          window.sessionStorage.removeItem(SESSION_KEY);
+          setSession(null);
+          setError("Database session expired. Sign in again.");
+          setAuthBootstrapDone(true);
+          return;
+        }
+        void supabase.auth.refreshSession().finally(() => {
+          setAuthBootstrapDone(true);
+        });
+      });
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -55,6 +88,39 @@ export function AdminLoginGate() {
         return;
       }
 
+      const sessionRes = await fetch("/api/admin-supabase-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const sessionPayload = (await sessionRes.json()) as {
+        ok?: boolean;
+        message?: string;
+        access_token?: string;
+        refresh_token?: string;
+      };
+
+      if (!sessionRes.ok || !sessionPayload.ok || !sessionPayload.access_token || !sessionPayload.refresh_token) {
+        setError(sessionPayload.message ?? "Unable to establish database session.");
+        return;
+      }
+
+      const supabase = getBrowserSupabaseClient();
+      if (!supabase) {
+        setError("Supabase client is not available.");
+        return;
+      }
+
+      const { error: setSessionError } = await supabase.auth.setSession({
+        access_token: sessionPayload.access_token,
+        refresh_token: sessionPayload.refresh_token,
+      });
+
+      if (setSessionError) {
+        setError(setSessionError.message);
+        return;
+      }
+
       window.sessionStorage.setItem(SESSION_KEY, JSON.stringify(payload.admin));
       setSession(payload.admin);
       setUsername("");
@@ -66,9 +132,21 @@ export function AdminLoginGate() {
     }
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    const supabase = getBrowserSupabaseClient();
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
     window.sessionStorage.removeItem(SESSION_KEY);
     setSession(null);
+  }
+
+  if (!authBootstrapDone) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-zinc-100 px-4">
+        <p className="text-sm text-zinc-600">Restoring session…</p>
+      </main>
+    );
   }
 
   if (isAuthed) {
@@ -78,8 +156,8 @@ export function AdminLoginGate() {
           <span className="mr-2">Admin: {session?.username}</span>
           <button
             type="button"
-            onClick={handleLogout}
-            className="font-semibold text-emerald-700 hover:text-emerald-800"
+            onClick={() => void handleLogout()}
+            className="cursor-pointer font-semibold text-emerald-700 hover:text-emerald-800"
           >
             Logout
           </button>
@@ -95,7 +173,7 @@ export function AdminLoginGate() {
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">TrashMap PH</p>
         <h1 className="mt-2 text-2xl font-semibold text-zinc-900">LGU Admin Sign In</h1>
         <p className="mt-2 text-sm text-zinc-600">
-          Authorized admins only. Demo credentials are seeded for local Day 2 testing.
+          Authorized admins only. Demo gate credentials: <code className="rounded bg-zinc-100 px-1 py-0.5 text-xs font-medium text-zinc-800">admin123</code> / <code className="rounded bg-zinc-100 px-1 py-0.5 text-xs font-medium text-zinc-800">admin123</code>.
         </p>
 
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
@@ -129,7 +207,7 @@ export function AdminLoginGate() {
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full rounded-xl bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
+            className="w-full cursor-pointer rounded-xl bg-emerald-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isSubmitting ? "Verifying..." : "Sign In as Admin"}
           </button>

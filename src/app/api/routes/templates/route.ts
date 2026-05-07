@@ -11,6 +11,10 @@ type CreateTemplateBody = {
   zoneId?: string | null;
   recurrenceDay: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
   createdBy?: string;
+  /** 0–23, default 6 */
+  startHour?: number;
+  /** 1–24 exclusive end of window, default 12 */
+  endHour?: number;
   stops: TemplateStopInput[];
 };
 
@@ -42,6 +46,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, message: msg }, { status: 400 });
     }
 
+    const startHour = Number(body.startHour ?? 6);
+    const endHour = Number(body.endHour ?? 12);
+    if (!Number.isFinite(startHour) || startHour < 0 || startHour > 23) {
+      return NextResponse.json({ ok: false, message: "startHour must be 0–23." }, { status: 400 });
+    }
+    if (!Number.isFinite(endHour) || endHour < 1 || endHour > 24) {
+      return NextResponse.json({ ok: false, message: "endHour must be 1–24." }, { status: 400 });
+    }
+    if (endHour <= startHour) {
+      return NextResponse.json({ ok: false, message: "endHour must be greater than startHour." }, { status: 400 });
+    }
+
     const { data: template, error: templateError } = await supabase
       .from("route_templates")
       .insert({
@@ -49,6 +65,8 @@ export async function POST(request: Request) {
         zone_id: resolvedZoneId,
         recurrence_day: body.recurrenceDay,
         created_by: body.createdBy ?? null,
+        start_hour: startHour,
+        end_hour: endHour,
       })
       .select("id, zone_id")
       .single();

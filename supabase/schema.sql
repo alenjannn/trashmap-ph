@@ -144,25 +144,7 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_refresh_hotspots_on_reports on public.reports;
-create or replace function public.refresh_hotspots_on_reports_trigger()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  perform public.refresh_hotspots_from_reports();
-  return null;
-end;
-$$;
-
-create trigger trg_refresh_hotspots_on_reports
-  after insert or update or delete on public.reports
-  for each statement
-  execute procedure public.refresh_hotspots_on_reports_trigger();
-
--- Initial build for existing reports.
+-- Initial build for existing reports (trigger attaches after risk_zones + refresh helpers exist).
 select public.refresh_hotspots_from_reports();
 
 -- Collection fleet registry
@@ -275,6 +257,24 @@ create table if not exists route_template_stops (
 
 create index if not exists idx_route_template_stops_template
   on route_template_stops (template_id, stop_order);
+
+-- Link materialized routes back to their source weekly template (retro-fit).
+-- Idempotency for `materialize` keys on (template_id, route_date) instead of
+-- (zone_id, source) which collides when multiple templates share a zone.
+-- Cascade deletes so removing a weekly template wipes its materialized routes
+-- (and through their own cascades, route_stops + route_progress + route_assignments).
+alter table public.routes
+  add column if not exists template_id uuid;
+
+alter table public.routes
+  drop constraint if exists routes_template_id_fkey;
+
+alter table public.routes
+  add constraint routes_template_id_fkey
+  foreign key (template_id) references public.route_templates(id) on delete cascade;
+
+create index if not exists idx_routes_template_date
+  on public.routes (template_id, route_date);
 
 -- Driver assignment history and assignment mode trace.
 create table if not exists route_assignments (
@@ -460,6 +460,67 @@ create table if not exists risk_zones (
 create index if not exists idx_risk_zones_center_location on risk_zones using gist (center_location);
 create index if not exists idx_risk_zones_level_score on risk_zones (level, score desc);
 
+alter table public.risk_zones add column if not exists radius_meters integer;
+
+-- Risk zones are not static demo geometry: they mirror active hotspots (which rebuild from reports).
+create or replace function public.refresh_risk_zones_from_hotspots()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  delete from public.risk_zones;
+  insert into public.risk_zones (name, center_lat, center_lng, score, level, zone_id, radius_meters)
+  select
+    'Report cluster ' || h.id::text,
+    h.center_lat,
+    h.center_lng,
+    round(
+      least(
+        1.000::numeric,
+        greatest(
+          0.050::numeric,
+          (case h.severity
+            when 'critical' then 0.850::numeric
+            when 'high' then 0.650::numeric
+            when 'medium' then 0.450::numeric
+            when 'low' then 0.250::numeric
+            else 0.350::numeric
+          end) + least(0.120::numeric, coalesce(h.unique_reporters_count, 0) * 0.010::numeric)
+        )
+      ),
+      3
+    )::numeric(4, 3),
+    h.severity,
+    null::uuid,
+    h.radius_meters
+  from public.hotspots h
+  where h.status = 'active';
+end;
+$$;
+
+create or replace function public.refresh_hotspots_on_reports_trigger()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.refresh_hotspots_from_reports();
+  perform public.refresh_risk_zones_from_hotspots();
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_refresh_hotspots_on_reports on public.reports;
+create trigger trg_refresh_hotspots_on_reports
+  after insert or update or delete on public.reports
+  for each statement
+  execute procedure public.refresh_hotspots_on_reports_trigger();
+
+select public.refresh_risk_zones_from_hotspots();
+
 -- Citizen/driver points + badges for gamification views.
 create table if not exists gamification_points (
   user_id uuid primary key references auth.users(id) on delete cascade,
@@ -515,14 +576,6 @@ set lat = excluded.lat,
     lng = excluded.lng,
     is_active = excluded.is_active,
     updated_at = now();
-
-insert into risk_zones (name, center_lat, center_lng, score, level)
-values
-  ('Brentwood North Cluster', 14.690020, 121.106720, 0.420, 'medium'),
-  ('Brentwood East Cluster', 14.689260, 121.107840, 0.610, 'high'),
-  ('Brentwood Core Cluster', 14.688860, 121.107180, 0.780, 'high'),
-  ('Brentwood South Cluster', 14.688020, 121.105980, 0.330, 'low')
-on conflict do nothing;
 
 -- Seed the primary demo zone so schedules seed has a valid zone_id to cross join against.
 insert into zones (name, lat, lng)
@@ -597,19 +650,97 @@ create policy "profiles_select_own"
   to authenticated
   using (auth.uid() = user_id);
 
--- Admins list driver profiles (assignment dropdown). Citizens/drivers do not read full driver roster.
+-- SECURITY DEFINER helper: lookup own role without triggering RLS recursion.
+-- Used by policies on app_user_profiles itself (any policy that selects from
+-- app_user_profiles inside another app_user_profiles policy = infinite recursion).
+create or replace function public.is_current_user_admin()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.app_user_profiles p
+    where p.user_id = auth.uid() and p.role = 'admin'
+  );
+$$;
+
+revoke all on function public.is_current_user_admin() from public;
+grant execute on function public.is_current_user_admin() to anon, authenticated;
+
+-- Admins read full profile roster (driver dropdown + future LGU tools).
 drop policy if exists "profiles_select_drivers" on public.app_user_profiles;
-create policy "profiles_select_drivers"
+drop policy if exists "profiles_select_admin_roster" on public.app_user_profiles;
+create policy "profiles_select_admin_roster"
   on public.app_user_profiles
   for select
   to authenticated
-  using (
-    role = 'driver'
-    and exists (
-      select 1 from public.app_user_profiles p
-      where p.user_id = auth.uid() and p.role = 'admin'
+  using (public.is_current_user_admin());
+
+-- Email mask helper: distresscode04@gmail.com -> distress*****4@gmail.com.
+-- Keep first ≤8 chars of local part, 5 stars, last 1 char, then @domain.
+-- Pure / immutable so it can be used in views and computed columns later.
+create or replace function public.mask_email(input text)
+returns text
+language sql
+immutable
+as $$
+  select case
+    when input is null then null
+    when position('@' in input) = 0 then input
+    else (
+      substring(
+        split_part(input, '@', 1)
+        from 1
+        for least(8, greatest(length(split_part(input, '@', 1)) - 2, 1))
+      )
+      || '*****'
+      || right(split_part(input, '@', 1), 1)
+      || '@'
+      || split_part(input, '@', 2)
     )
-  );
+  end;
+$$;
+
+revoke all on function public.mask_email(text) from public;
+grant execute on function public.mask_email(text) to anon, authenticated;
+
+-- Admin-only roster RPC: joins auth.users.email and returns it masked.
+-- auth schema is not exposed to the Data API, so a SECURITY DEFINER function is the
+-- safe way to surface email to the dashboard without granting clients raw auth access.
+create or replace function public.list_admin_user_roster()
+returns table (
+  user_id uuid,
+  display_name text,
+  role text,
+  email_masked text
+)
+language plpgsql
+security definer
+stable
+set search_path = public
+as $$
+begin
+  if not public.is_current_user_admin() then
+    raise exception 'Forbidden: admin role required' using errcode = '42501';
+  end if;
+
+  return query
+  select
+    p.user_id,
+    p.display_name,
+    p.role,
+    public.mask_email(u.email) as email_masked
+  from public.app_user_profiles p
+  left join auth.users u on u.id = p.user_id
+  order by p.role, coalesce(p.display_name, ''), u.email;
+end;
+$$;
+
+revoke all on function public.list_admin_user_roster() from public;
+grant execute on function public.list_admin_user_roster() to authenticated;
 
 drop policy if exists "profiles_update_own" on public.app_user_profiles;
 create policy "profiles_update_own"
@@ -1006,6 +1137,15 @@ for select
 to anon, authenticated
 using (true);
 
+-- Allow service-role / trigger functions to rebuild hotspots.
+drop policy if exists "hotspots_all_service" on public.hotspots;
+create policy "hotspots_all_service"
+on public.hotspots
+for all
+to service_role
+using (true)
+with check (true);
+
 alter table public.collection_points enable row level security;
 drop policy if exists "collection_points_select_public" on public.collection_points;
 create policy "collection_points_select_public"
@@ -1048,6 +1188,15 @@ on public.risk_zones
 for select
 to anon, authenticated
 using (true);
+
+-- Allow service-role / trigger functions to rebuild risk zones.
+drop policy if exists "risk_zones_all_service" on public.risk_zones;
+create policy "risk_zones_all_service"
+on public.risk_zones
+for all
+to service_role
+using (true)
+with check (true);
 
 -- Reference zones for schedules, templates, and dashboard dropdowns.
 alter table public.zones enable row level security;
@@ -1111,7 +1260,7 @@ drop policy if exists "route_templates_select_auth" on public.route_templates;
 create policy "route_templates_select_auth"
 on public.route_templates
 for select
-to authenticated
+to anon, authenticated
 using (true);
 
 drop policy if exists "route_templates_write_admin" on public.route_templates;
@@ -1137,7 +1286,7 @@ drop policy if exists "route_template_stops_select_auth" on public.route_templat
 create policy "route_template_stops_select_auth"
 on public.route_template_stops
 for select
-to authenticated
+to anon, authenticated
 using (true);
 
 drop policy if exists "route_template_stops_write_admin" on public.route_template_stops;
@@ -1410,18 +1559,22 @@ exception when duplicate_object then
 end $$;
 
 -- ---------------------------------------------------------------------------
--- DEV test accounts — Supabase Auth (email/password). Password both: 123456.
--- Idempotent: skips if email already exists in auth.users.
--- LGU dashboard admin gate uses public.admin_access_secrets (admin123 / admin123),
--- not Supabase Auth. Remove or replace credentials before production.
+-- DEV test accounts — Supabase Auth (email/password). All test users: 123456.
+-- LGU dashboard user: lgu-dashboard@trashmap.ph / 123456 (matches
+-- LGU_SUPABASE_AUTH_PASSWORD in Next.js for JWT + RLS). Admin gate still uses
+-- public.admin_access_secrets (admin123 / admin123) for the sign-in form.
+-- Idempotent: skips insert if email exists; password backfill below resets it.
+-- Remove or replace credentials before production.
 -- ---------------------------------------------------------------------------
 
 do $$
 declare
   citizen_id uuid := 'b2c3d4e5-f6a7-5b8c-9d0e-1f2a3b4c5d01';
   driver_id uuid := 'b2c3d4e5-f6a7-5b8c-9d0e-1f2a3b4c5d02';
+  lgu_admin_id uuid := 'b2c3d4e5-f6a7-5b8c-9d0e-1f2a3b4c5d04';
   enc_citizen text := crypt('123456', gen_salt('bf'));
   enc_driver text := crypt('123456', gen_salt('bf'));
+  enc_lgu_admin text := crypt('123456', gen_salt('bf'));
 begin
   if not exists (select 1 from auth.users where email = 'chiefestrabon04@gmail.com') then
     insert into auth.users (
@@ -1536,6 +1689,63 @@ begin
       now()
     );
   end if;
+
+  if not exists (select 1 from auth.users where email = 'lgu-dashboard@trashmap.ph') then
+    insert into auth.users (
+      id,
+      instance_id,
+      aud,
+      role,
+      email,
+      encrypted_password,
+      email_confirmed_at,
+      raw_app_meta_data,
+      raw_user_meta_data,
+      created_at,
+      updated_at,
+      confirmation_token,
+      email_change,
+      email_change_token_new,
+      recovery_token
+    )
+    values (
+      lgu_admin_id,
+      '00000000-0000-0000-0000-000000000000',
+      'authenticated',
+      'authenticated',
+      'lgu-dashboard@trashmap.ph',
+      enc_lgu_admin,
+      now(),
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      '{"requested_role":"admin"}'::jsonb,
+      now(),
+      now(),
+      '',
+      '',
+      '',
+      ''
+    );
+    insert into auth.identities (
+      id,
+      user_id,
+      identity_data,
+      provider,
+      provider_id,
+      last_sign_in_at,
+      created_at,
+      updated_at
+    )
+    values (
+      lgu_admin_id,
+      lgu_admin_id,
+      format('{"sub":"%s","email":"lgu-dashboard@trashmap.ph"}', lgu_admin_id)::jsonb,
+      'email',
+      lgu_admin_id::text,
+      now(),
+      now(),
+      now()
+    );
+  end if;
 end $$;
 
 -- Profiles: backfill if trigger missed; keep roles aligned to test emails.
@@ -1543,19 +1753,188 @@ insert into public.app_user_profiles (user_id, role, is_authority_confirmed)
 select u.id,
   case u.email
     when 'distresscode04@gmail.com' then 'driver'
+    when 'lgu-dashboard@trashmap.ph' then 'admin'
     else 'citizen'
   end,
   true
 from auth.users u
-where u.email in ('chiefestrabon04@gmail.com', 'distresscode04@gmail.com')
+where u.email in (
+    'chiefestrabon04@gmail.com',
+    'distresscode04@gmail.com',
+    'lgu-dashboard@trashmap.ph'
+  )
   and not exists (select 1 from public.app_user_profiles p where p.user_id = u.id);
 
 update public.app_user_profiles p
 set role = case u.email
     when 'distresscode04@gmail.com' then 'driver'
+    when 'lgu-dashboard@trashmap.ph' then 'admin'
     else 'citizen'
   end,
+  is_authority_confirmed = true,
   updated_at = now()
 from auth.users u
 where p.user_id = u.id
-  and u.email in ('chiefestrabon04@gmail.com', 'distresscode04@gmail.com');
+  and u.email in (
+    'chiefestrabon04@gmail.com',
+    'distresscode04@gmail.com',
+    'lgu-dashboard@trashmap.ph'
+  );
+
+-- Reset DEV passwords to 123456 for all seeded test users (idempotent).
+-- Without this, an already-created lgu-dashboard@trashmap.ph keeps its old
+-- password forever because the auth.users insert above is gated by NOT EXISTS.
+update auth.users
+set encrypted_password = crypt('123456', gen_salt('bf')),
+    updated_at = now()
+where email in (
+  'chiefestrabon04@gmail.com',
+  'distresscode04@gmail.com',
+  'lgu-dashboard@trashmap.ph'
+);
+
+-- ============================================================================
+-- 2026-05-07: Permanent driver↔template assignments + live telemetry
+-- Spec: docs/specs/2026-05-07-driver-nav-permanent-assign-live-tracking.md
+-- ============================================================================
+
+-- 1) Time window on weekly templates (default 06:00–12:00).
+alter table public.route_templates
+  add column if not exists start_hour smallint not null default 6
+    check (start_hour between 0 and 23),
+  add column if not exists end_hour smallint not null default 12
+    check (end_hour between 1 and 24);
+
+alter table public.route_templates
+  drop constraint if exists route_templates_hours_check;
+alter table public.route_templates
+  add constraint route_templates_hours_check check (end_hour > start_hour);
+
+-- 2) Permanent driver↔template assignment table.
+create table if not exists public.route_template_assignments (
+  id uuid default gen_random_uuid() primary key,
+  template_id uuid not null references public.route_templates(id) on delete cascade,
+  driver_id uuid not null references auth.users(id) on delete cascade,
+  assigned_by uuid references auth.users(id) on delete set null,
+  assigned_at timestamptz not null default now(),
+  unassigned_at timestamptz,
+  is_active boolean not null default true
+);
+
+create unique index if not exists idx_rta_one_active_per_pair
+  on public.route_template_assignments (template_id, driver_id) where is_active;
+create index if not exists idx_rta_driver_active
+  on public.route_template_assignments (driver_id, is_active);
+create index if not exists idx_rta_template_active
+  on public.route_template_assignments (template_id, is_active);
+
+alter table public.route_template_assignments enable row level security;
+
+drop policy if exists rta_select_own on public.route_template_assignments;
+create policy rta_select_own on public.route_template_assignments
+  for select to authenticated
+  using (
+    driver_id = auth.uid()
+    or public.is_current_user_admin()
+  );
+
+drop policy if exists rta_admin_write on public.route_template_assignments;
+create policy rta_admin_write on public.route_template_assignments
+  for all to authenticated
+  using (public.is_current_user_admin())
+  with check (public.is_current_user_admin());
+
+-- 3) Live GPS pings for ETA + admin truck tracking.
+create table if not exists public.truck_pings (
+  id uuid default gen_random_uuid() primary key,
+  route_id uuid not null references public.routes(id) on delete cascade,
+  truck_id uuid not null references public.trucks(id) on delete cascade,
+  driver_id uuid references auth.users(id) on delete set null,
+  lat double precision not null,
+  lng double precision not null,
+  speed_kmh numeric(5,2),
+  heading numeric(5,2),
+  recorded_at timestamptz not null default now()
+);
+
+create index if not exists idx_truck_pings_route_time
+  on public.truck_pings (route_id, recorded_at desc);
+
+alter table public.truck_pings enable row level security;
+
+drop policy if exists truck_pings_insert_self on public.truck_pings;
+create policy truck_pings_insert_self on public.truck_pings
+  for insert to authenticated
+  with check (driver_id = auth.uid());
+
+drop policy if exists truck_pings_select_admin on public.truck_pings;
+create policy truck_pings_select_admin on public.truck_pings
+  for select to authenticated
+  using (
+    driver_id = auth.uid()
+    or public.is_current_user_admin()
+  );
+
+-- 4) Retention helper. Schedule via pg_cron or a Vercel cron job hitting
+--    /api/admin/cleanup-pings (out of scope for v1; rely on manual purge).
+create or replace function public.cleanup_truck_pings()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  deleted_count integer;
+begin
+  delete from public.truck_pings
+  where recorded_at < now() - interval '7 days';
+  get diagnostics deleted_count = row_count;
+  return deleted_count;
+end;
+$$;
+
+revoke all on function public.cleanup_truck_pings() from public;
+grant execute on function public.cleanup_truck_pings() to service_role;
+
+-- 5) Reports.report_type already accepts 'missed_pickup' (see line 29 check constraint). No change needed.
+
+-- Phase 3: allow server to mark stops/progress as missed when route ends with pending/arrived stops.
+alter table public.route_stops drop constraint if exists route_stops_status_check;
+alter table public.route_stops
+  add constraint route_stops_status_check
+  check (status in ('pending', 'arrived', 'completed', 'skipped', 'missed'));
+
+alter table public.route_progress drop constraint if exists route_progress_status_check;
+alter table public.route_progress
+  add constraint route_progress_status_check
+  check (status in ('pending', 'arrived', 'completed', 'skipped', 'missed'));
+
+do $$
+begin
+  alter publication supabase_realtime add table truck_pings;
+exception when duplicate_object then
+  null;
+end $$;
+
+-- Phase 6: enforce at most one materialized route per (template_id, route_date).
+-- First remove orphaned duplicate routes that have no child rows (safe to purge).
+-- Then promote the plain index to a partial unique index.
+do $$ begin
+  delete from public.routes a
+  using public.routes b
+  where a.template_id is not null
+    and a.template_id = b.template_id
+    and a.route_date  = b.route_date
+    and a.created_at  < b.created_at
+    and not exists (select 1 from public.route_stops       where route_id = a.id)
+    and not exists (select 1 from public.route_assignments where route_id = a.id)
+    and not exists (select 1 from public.route_progress    where route_id = a.id);
+
+  drop index if exists public.idx_routes_template_date;
+  create unique index idx_routes_template_date
+    on public.routes (template_id, route_date)
+    where template_id is not null;
+exception when others then
+  -- Silently skip if active duplicates still exist; run the delete above manually first.
+  null;
+end $$;

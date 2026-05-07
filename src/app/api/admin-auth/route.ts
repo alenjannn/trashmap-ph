@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { verifyAdminAccessSecrets } from "@/lib/admin-access-verify";
 
 type LoginBody = {
   username?: string;
@@ -28,37 +28,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey);
-  const { data, error } = await supabase
-    .from("admin_access_secrets")
-    .select("username, password_plain, is_active")
-    .eq("username", username)
-    .maybeSingle();
-
-  if (error) {
-    return NextResponse.json(
-      { ok: false, message: "Unable to validate admin credentials." },
-      { status: 500 },
-    );
-  }
-
-  if (!data || !data.is_active) {
-    return NextResponse.json(
-      { ok: false, message: "Admin authority is not confirmed." },
-      { status: 401 },
-    );
-  }
-
-  if (data.password_plain !== password) {
-    return NextResponse.json(
-      { ok: false, message: "Invalid admin username or password." },
-      { status: 401 },
-    );
+  const gate = await verifyAdminAccessSecrets(supabaseUrl, supabaseAnonKey, username, password);
+  if (!gate.ok) {
+    return NextResponse.json({ ok: false, message: gate.message }, { status: gate.status });
   }
 
   return NextResponse.json({
     ok: true,
     message: "Admin login successful.",
-    admin: { username: data.username, authorityConfirmed: data.is_active },
+    admin: { username, authorityConfirmed: true },
   });
 }

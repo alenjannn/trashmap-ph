@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:client_app/models/app_user_role.dart';
+import 'package:client_app/screens/assigned_templates_screen.dart';
 import 'package:client_app/screens/auth_screen.dart';
-import 'package:client_app/screens/driver_shell.dart';
 import 'package:client_app/screens/home_shell.dart';
 import 'package:client_app/services/auth_service.dart';
 import 'package:client_app/services/supabase_service.dart';
@@ -106,7 +106,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
 
     if (_role == AppUserRole.driver) {
-      return DriverShell(onSignOut: _signOut);
+      return AssignedTemplatesScreen(onSignOut: _signOut);
     }
 
     return HomeShell(

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Flutter project — ESLint must never scan vendor/build JS inside it.
+    "client_app/**",
   ]),
 ]);
 
