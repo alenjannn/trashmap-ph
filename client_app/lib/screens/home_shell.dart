@@ -23,6 +23,7 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _selectedIndex = 0;
   LatLng? _selectedReportPoint;
+  bool _isPinDropMode = false;
   RealtimeChannel? _notificationsChannel;
   List<RouteNotificationItem> _routeNotifications = <RouteNotificationItem>[];
 
@@ -164,9 +165,11 @@ class _HomeShellState extends State<HomeShell> {
               children: <Widget>[
                 MapScreen(
                   selectedPoint: _selectedReportPoint,
+                  isPinDropMode: _isPinDropMode,
                   onPinSelected: (LatLng point) {
                     setState(() {
                       _selectedReportPoint = point;
+                      _isPinDropMode = false;
                     });
                   },
                 ),
@@ -175,6 +178,7 @@ class _HomeShellState extends State<HomeShell> {
                   onRequestPinTab: () {
                     setState(() {
                       _selectedIndex = 0;
+                      _isPinDropMode = true;
                     });
                   },
                 ),

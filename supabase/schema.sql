@@ -470,7 +470,7 @@ security definer
 set search_path = public
 as $$
 begin
-  delete from public.risk_zones;
+  delete from public.risk_zones where true;
   insert into public.risk_zones (name, center_lat, center_lng, score, level, zone_id, radius_meters)
   select
     'Report cluster ' || h.id::text,
@@ -1146,6 +1146,14 @@ to service_role
 using (true)
 with check (true);
 
+drop policy if exists "hotspots_all_postgres" on public.hotspots;
+create policy "hotspots_all_postgres"
+on public.hotspots
+for all
+to postgres
+using (true)
+with check (true);
+
 alter table public.collection_points enable row level security;
 drop policy if exists "collection_points_select_public" on public.collection_points;
 create policy "collection_points_select_public"
@@ -1195,6 +1203,14 @@ create policy "risk_zones_all_service"
 on public.risk_zones
 for all
 to service_role
+using (true)
+with check (true);
+
+drop policy if exists "risk_zones_all_postgres" on public.risk_zones;
+create policy "risk_zones_all_postgres"
+on public.risk_zones
+for all
+to postgres
 using (true)
 with check (true);
 
